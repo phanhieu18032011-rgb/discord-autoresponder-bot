@@ -98,7 +98,7 @@ async def unmute(inter, member: discord.Member):
     else:
         await inter.response.send_message("⚠️ Không có role Muted.", ephemeral=True)
 
-@tree.command(name="masssend", description="Gửi tin nhắn nhiều lần (Admin only, max 5)")
+@tree.command(name="masssend", description="Gửi tin nhắn nhiều lần (Admin only, max 100)")
 async def masssend(inter, channel: discord.TextChannel, message: str, count: int = 1):
     if not is_admin(inter):
         return await inter.response.send_message("⚠️ Chỉ admin mới dùng được.", ephemeral=True)
