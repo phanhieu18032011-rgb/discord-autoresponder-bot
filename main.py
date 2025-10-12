@@ -102,7 +102,7 @@ async def unmute(inter, member: discord.Member):
 async def masssend(inter, channel: discord.TextChannel, message: str, count: int = 1):
     if not is_admin(inter):
         return await inter.response.send_message("⚠️ Chỉ admin mới dùng được.", ephemeral=True)
-    count = min(max(count, 1), 5)
+    count = min(max(count, 1), 100)
     await inter.response.send_message(f"📤 Đang gửi {count} tin nhắn tới {channel.mention}...", ephemeral=True)
     for i in range(count):
         await channel.send(message)
