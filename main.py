@@ -116,13 +116,13 @@ async def on_message(message: discord.Message):
 # ----------------------
 # Slash Commands — Autoresponder
 # ----------------------
-@tree.command(name="autoresponderadd", description="Add an autoresponder trigger")
+@tree.command(name="autoresponder|add", description="Add an autoresponder trigger")
 @app_commands.describe(trigger="Trigger text (contains)", response="Bot response")
 async def slash_add(interaction: discord.Interaction, trigger: str, response: str):
     AUTORESPONDERS[trigger.lower()] = response
     await interaction.response.send_message(f"✅ Added autoresponder: `{trigger}` → {response}", ephemeral=True)
 
-@tree.command(name="autoresponderremove", description="Remove an autoresponder trigger")
+@tree.command(name="autoresponder|remove", description="Remove an autoresponder trigger")
 @app_commands.describe(trigger="Trigger text to remove")
 async def slash_remove(interaction: discord.Interaction, trigger: str):
     if trigger.lower() in AUTORESPONDERS:
@@ -131,7 +131,7 @@ async def slash_remove(interaction: discord.Interaction, trigger: str):
     else:
         await interaction.response.send_message("⚠️ Trigger not found.", ephemeral=True)
 
-@tree.command(name="autoresponderlist", description="List autoresponders")
+@tree.command(name="autoresponder|list", description="List autoresponders")
 async def slash_list(interaction: discord.Interaction):
     if not AUTORESPONDERS:
         await interaction.response.send_message("📭 No autoresponders.", ephemeral=True)
@@ -335,7 +335,7 @@ async def pfx_giveaway(ctx: commands.Context, channel: discord.TextChannel, dura
 # ----------------------
 # Mass send (safe)
 # ----------------------
-@tree.command(name="spammasssend", description="Send message multiple times (Admin only, max 10000)")
+@tree.command(name="spam|masssend", description="Send message multiple times (Admin only, max 10000)")
 @app_commands.describe(channel="Channel to send", message="Message", count="1-5", delay="Seconds between messages")
 async def slash_masssend(interaction: discord.Interaction, channel: discord.TextChannel, message: str, count: int = 1, delay: int = 1):
     if not is_admin_inter(interaction):
