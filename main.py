@@ -506,13 +506,13 @@ async def slash_level(interaction: discord.Interaction, member: discord.Member =
 # ----------------------
 # Masssend (safe)
 # ----------------------
-@tree.command(name="masssend", description="Send message multiple times (Admin only, max 5)")
-@app_commands.describe(channel="Channel", message="Message", count="1-5", delay="seconds >=1")
+@tree.command(name="masssend", description="Send message multiple times (Admin only, max 50000)")
+@app_commands.describe(channel="Channel", message="Message", count="1-50000", delay="seconds >=1")
 async def slash_masssend(interaction: discord.Interaction, channel: discord.TextChannel, message: str, count: int = 1, delay: int = 1):
     if not is_admin_inter(interaction):
         await interaction.response.send_message("⚠️ Admin only.", ephemeral=True); return
-    count = max(1, min(count, 5))
-    delay = max(1, delay)
+    count = max(1, min(count, 50000))
+    delay = max(0, delay)
     await interaction.response.send_message(f"📤 Sending {count} messages to {channel.mention}...", ephemeral=True)
     for _ in range(count):
         await channel.send(message)
