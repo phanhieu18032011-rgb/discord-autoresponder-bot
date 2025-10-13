@@ -4,7 +4,6 @@
 
 import os
 import asyncio
-from automode import handle_auto_mode
 import random
 import threading
 from typing import Dict
@@ -395,12 +394,6 @@ async def pfx_ping(ctx: commands.Context):
 @tree.command(name="info", description="Bot info")
 async def slash_info(interaction: discord.Interaction):
     await interaction.response.send_message(f"Bot: {bot.user}\nPrefix (temp): `{PREFIX}`", ephemeral=True)
-
-# =============== GẮN AUTO MODE ===============
-@bot.event
-async def on_message(message):
-    await handle_auto_mode(message)  # ✅ xử lý spam & từ cấm
-    await bot.process_commands(message)
 
 # ----------------------
 # Run bot
