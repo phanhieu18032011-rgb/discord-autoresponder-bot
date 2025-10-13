@@ -56,7 +56,7 @@ tree = bot.tree
 # ----------------------
 # Utilities
 # ----------------------
-def is_admin_inter(interaction: app_commands.CommandInteraction) -> bool:
+def is_admin_inter(interaction) -> bool:
     try:
         return interaction.user.guild_permissions.administrator
     except Exception:
