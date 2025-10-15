@@ -89,6 +89,7 @@ async def ping_server():
     while True:
         try:
             # Tự ping chính nó để giữ active
+            # LƯU Ý: Thay 'your-bot-name' bằng URL thực tế của bạn trên Render
             requests.get('https://your-bot-name.onrender.com', timeout=5)
             print(f"🔄 Keep-alive ping at {datetime.now().strftime('%H:%M:%S')}")
         except:
@@ -400,12 +401,11 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         pass
 
 # Chạy bot
-if __name__ == "__main__":
-    try:
-        print("🚀 Đang khởi động bot mã hóa với Keep Alive...")
-        print("📡 Flask server đang chạy trên port 8080")
-        client.run(TOKEN)
-    except discord.LoginFailure:
-        print("❌ Token không hợp lệ! Kiểm tra DISCORD_BOT_TOKEN.")
-    except Exception as e:
-        print(f"❌ Lỗi khởi động: {e}")
+try:
+    print("🚀 Đang khởi động bot mã hóa với Keep Alive...")
+    print("📡 Flask server đang chạy trên port 8080")
+    client.run(TOKEN)
+except discord.LoginFailure:
+    print("❌ Token không hợp lệ! Kiểm tra DISCORD_BOT_TOKEN.")
+except Exception as e:
+    print(f"❌ Lỗi khởi động: {e}")
