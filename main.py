@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 # ====== CẤU HÌNH ======
-TOKEN = os.getenv(TOKEN")  # lấy token từ biến môi trường
+TOKEN = os.getenv("TOKEN")  # lấy token từ biến môi trường
 intents = discord.Intents.default()
 intents.message_content = True
 
