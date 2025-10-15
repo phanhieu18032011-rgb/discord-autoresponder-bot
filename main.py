@@ -90,7 +90,7 @@ async def ping_server():
         try:
             # Tự ping chính nó để giữ active
             # LƯU Ý: Thay 'your-bot-name' bằng URL thực tế của bạn trên Render
-            requests.get('https://your-bot-name.onrender.com', timeout=5)
+            requests.get('https://discord-autoresponder-bot.onrender.com/', timeout=5)
             print(f"🔄 Keep-alive ping at {datetime.now().strftime('%H:%M:%S')}")
         except:
             print("⚠️  Không thể ping server")
