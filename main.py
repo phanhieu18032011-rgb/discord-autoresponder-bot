@@ -36,7 +36,7 @@ async def on_ready():
         await tree.sync()
         print("✅ Slash commands đã sync toàn cầu.")
     except Exception as e:
-        print(f"Lỗi sync: {e}")
+        print(f"⚠️ Lỗi sync: {e}")
 
 # ==== Prefix Commands ====
 @bot.command()
@@ -122,4 +122,3 @@ async def say_slash(interaction: discord.Interaction, text: str):
 # ==== Chạy bot ====
 keep_alive()
 bot.run(TOKEN)
-
