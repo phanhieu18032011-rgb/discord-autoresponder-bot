@@ -1,2 +1,4 @@
 discord.py
+cryptography
 flask
+requests
