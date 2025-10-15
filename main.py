@@ -1,531 +1,411 @@
-# main.py
-# Full-feature single-file bot for Render/GitHub
-# - Prefix "!" and slash "/"
-# - Reads token from DISCORD_TOKEN env var (use Render Secrets)
-# - Keep-alive via Flask for Render
-# - Autoresponder, automode (basic), giveaway, masssend, uplevel/level
-# - 100 admin placeholder commands and 50 fun placeholder commands (safe)
-# - No persistent storage (RAM only)
-
+import discord
+from discord import app_commands
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import base64
 import os
 import asyncio
-import random
-import threading
-from typing import Optional, Dict, Set, List
+import json
+from datetime import datetime, timedelta
 from flask import Flask
+from threading import Thread
+import requests
+import random
 
-import discord
-from discord.ext import commands
-from discord import app_commands
+# Flask app for keep alive
+app = Flask('')
 
-# -------------------------
-# CONFIG
-# -------------------------
-TOKEN = os.getenv("TOKEN")
-if not TOKEN:
-    raise SystemExit("Please set TOKEN environment variable (Render/GitHub secret).")
-
-PREFIX = "!"
-PORT = int(os.getenv("PORT", 10000))
-MUTED_ROLE_NAME = "Muted"
-
-# automode settings (basic)
-BANNED_WORDS = ["discord.gg", "invite", "spam", "đm", "chửi"]
-SPAM_WINDOW = 5       # seconds window
-SPAM_COUNT = 5        # messages inside window => considered spam
-WARN_LIMIT = 3
-MUTE_SECONDS = 600    # 10 minutes
-
-# -------------------------
-# KEEP-ALIVE (Flask)
-# -------------------------
-app = Flask("keepalive")
-
-@app.route("/")
+@app.route('/')
 def home():
-    return "✅ Bot is alive"
+    return "✅ Bot is alive and running!"
 
-def run_web():
-    app.run(host="0.0.0.0", port=PORT)
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
-threading.Thread(target=run_web, daemon=True).start()
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
 
-# -------------------------
-# BOT SETUP
-# -------------------------
+# Khởi động Flask server
+keep_alive()
+
+# Lấy token từ environment variable
+TOKEN = os.environ.get('TOKEN')
+
+if not TOKEN:
+    print("❌ Lỗi: Không tìm thấy TOKEN!")
+    exit(1)
+
+# Cấu hình Discord
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
-def prefix_callable(bot, message):
-    return PREFIX
+# Lưu trữ session
+encryption_sessions = {}
 
-bot = commands.Bot(command_prefix=prefix_callable, intents=intents)
-tree = bot.tree
+# Biến để theo dõi trạng thái bot
+bot_start_time = datetime.now()
 
-# -------------------------
-# IN-MEMORY STORAGE (RAM)
-# -------------------------
-AUTORESPONDERS: Dict[str, str] = {}
-LEVELS: Dict[int, int] = {}
-USER_XP: Dict[int, int] = {}
-WARNS: Dict[int, int] = {}
-LOG_CHANNEL: Dict[int, int] = {}
-WELCOME_MSG: Dict[int, str] = {}
-GOODBYE_MSG: Dict[int, str] = {}
-DISABLED_CMDS: Dict[int, Set[str]] = {}
+class AESEncryption:
+    @staticmethod
+    def generate_key_from_password(password: str, salt: bytes = None) -> tuple:
+        """Tạo khóa từ mật khẩu sử dụng PBKDF2"""
+        if salt is None:
+            salt = os.urandom(16)
+        
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        return key, salt
 
-# automode runtime
-_user_msgs: Dict[int, List[float]] = {}
-_user_warns: Dict[int, int] = {}
+    @staticmethod
+    def encrypt_aes_gcm(data: bytes, password: str) -> dict:
+        """Mã hóa AES-256-GCM"""
+        salt = os.urandom(16)
+        key, salt = AESEncryption.generate_key_from_password(password, salt)
+        iv = os.urandom(12)
+        
+        cipher = Cipher(algorithms.AES(key), modes.GCM(iv))
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(data) + encryptor.finalize()
+        
+        return {
+            'ciphertext': base64.urlsafe_b64encode(ciphertext).decode(),
+            'iv': base64.urlsafe_b64encode(iv).decode(),
+            'salt': base64.urlsafe_b64encode(salt).decode(),
+            'tag': base64.urlsafe_b64encode(encryptor.tag).decode()
+        }
 
-# -------------------------
-# HELPERS
-# -------------------------
-def is_admin_inter(interaction: discord.Interaction) -> bool:
-    try:
-        return interaction.user.guild_permissions.administrator
-    except Exception:
-        return False
-
-def is_admin_ctx(ctx: commands.Context) -> bool:
-    try:
-        return ctx.author.guild_permissions.administrator
-    except Exception:
-        return False
-
-async def ensure_muted_role(guild: discord.Guild) -> Optional[discord.Role]:
-    role = discord.utils.get(guild.roles, name=MUTED_ROLE_NAME)
-    if role:
-        return role
-    try:
-        role = await guild.create_role(name=MUTED_ROLE_NAME, reason="Create muted role")
-        for ch in guild.channels:
-            try:
-                if isinstance(ch, discord.TextChannel):
-                    await ch.set_permissions(role, send_messages=False, add_reactions=False)
-                elif isinstance(ch, discord.VoiceChannel):
-                    await ch.set_permissions(role, speak=False)
-            except Exception:
-                pass
-        return role
-    except Exception as e:
-        print("Failed create muted role:", e)
-        return None
-
-async def send_log(guild: discord.Guild, text: str):
-    cid = LOG_CHANNEL.get(guild.id)
-    if cid:
-        ch = guild.get_channel(cid)
-        if ch:
-            try:
-                await ch.send(text)
-            except Exception:
-                pass
-
-# -------------------------
-# AUTOMODE (basic banned words + spam)
-# -------------------------
-async def _warn_and_maybe_mute(message: discord.Message, reason: str):
-    uid = message.author.id
-    _user_warns[uid] = _user_warns.get(uid, 0) + 1
-    cnt = _user_warns[uid]
-    try:
-        await message.channel.send(f"{message.author.mention} ⚠️ Vi phạm ({cnt}/{WARN_LIMIT}): {reason}", delete_after=6)
-    except Exception:
-        pass
-    if cnt >= WARN_LIMIT:
+# Hàm ping để giữ bot alive
+async def ping_server():
+    while True:
         try:
-            guild = message.guild
-            role = await ensure_muted_role(guild)
-            if role:
-                await message.author.add_roles(role)
-                await message.channel.send(f"🔇 {message.author.mention} đã bị mute {MUTE_SECONDS//60} phút.")
-                async def _unmute_later(member, r, delay):
-                    await asyncio.sleep(delay)
-                    try:
-                        await member.remove_roles(r)
-                        _user_warns[member.id] = 0
-                    except Exception:
-                        pass
-                asyncio.create_task(_unmute_later(message.author, role, MUTE_SECONDS))
-        except Exception as e:
-            print("Automode mute error:", e)
+            # Tự ping chính nó để giữ active
+            requests.get('https://your-bot-name.onrender.com', timeout=5)
+            print(f"🔄 Keep-alive ping at {datetime.now().strftime('%H:%M:%S')}")
+        except:
+            print("⚠️  Không thể ping server")
+        await asyncio.sleep(300)  # Ping mỗi 5 phút
 
-async def handle_auto_mode(message: discord.Message):
-    if message.author.bot or not message.guild:
-        return
-    txt = message.content.lower()
-    for w in BANNED_WORDS:
-        if w in txt:
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            await _warn_and_maybe_mute(message, f"dùng từ cấm '{w}'")
-            return
-    # spam detection
-    now = message.created_at.timestamp()
-    uid = message.author.id
-    if uid not in _user_msgs:
-        _user_msgs[uid] = []
-    _user_msgs[uid].append(now)
-    _user_msgs[uid] = [t for t in _user_msgs[uid] if now - t <= SPAM_WINDOW]
-    if len(_user_msgs[uid]) >= SPAM_COUNT:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await _warn_and_maybe_mute(message, "Spam quá nhanh")
-        _user_msgs[uid] = []
-
-# -------------------------
-# EVENTS
-# -------------------------
-@bot.event
+@client.event
 async def on_ready():
-    print(f"✅ Bot ready: {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await tree.sync()
-        print(f"🔁 Synced {len(synced)} slash commands.")
-    except Exception as e:
-        print("Slash sync error:", e)
+    print(f'✅ Bot {client.user} đã sẵn sàng!')
+    print(f'📊 Đang chạy trên {len(client.guilds)} server(s)')
+    print(f'⏰ Bot khởi động lúc: {bot_start_time}')
+    
+    await tree.sync()
+    await client.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="/mahoa | !mahoa"))
+    
+    # Bắt đầu task keep-alive
+    client.loop.create_task(ping_server())
 
-@bot.event
-async def on_member_join(member: discord.Member):
-    gid = member.guild.id
-    if gid in WELCOME_MSG:
-        msg = WELCOME_MSG[gid].replace("{user}", member.mention).replace("{server}", member.guild.name)
-        try:
-            target = member.guild.system_channel or (member.guild.text_channels[0] if member.guild.text_channels else None)
-            if target:
-                await target.send(msg)
-        except Exception:
-            pass
-    await send_log(member.guild, f"👋 Member joined: {member} ({member.id})")
+# Slash Command /mahoa
+@tree.command(name="mahoa", description="Mã hóa source code với AES-256-GCM")
+async def mahoa_slash(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    
+    encryption_sessions[user_id] = {
+        'step': 'waiting_source',
+        'created_at': datetime.now(),
+        'type': 'slash'
+    }
+    
+    embed = discord.Embed(
+        title="🔐 **MÃ HÓA SOURCE CODE**",
+        description="**Vui lòng gửi source code của bạn để tiến hành mã hóa**",
+        color=0x5865F2,
+        timestamp=datetime.now()
+    )
+    embed.add_field(
+        name="📤 Cách gửi:",
+        value="• Gửi code trực tiếp trong tin nhắn\n• Hoặc attach file (.txt, .py, .js, .java, .cpp, v.v.)",
+        inline=False
+    )
+    embed.add_field(
+        name="🔒 Thuật toán:",
+        value="AES-256-GCM với PBKDF2",
+        inline=True
+    )
+    embed.add_field(
+        name="⏱️ Thời hạn:",
+        value="5 phút",
+        inline=True
+    )
+    embed.set_footer(text="Hệ thống mã hóa bảo mật cao")
+    
+    await interaction.response.send_message(embed=embed)
 
-@bot.event
-async def on_member_remove(member: discord.Member):
-    gid = member.guild.id
-    if gid in GOODBYE_MSG:
-        msg = GOODBYE_MSG[gid].replace("{user}", member.name).replace("{server}", member.guild.name)
-        try:
-            target = member.guild.system_channel or (member.guild.text_channels[0] if member.guild.text_channels else None)
-            if target:
-                await target.send(msg)
-        except Exception:
-            pass
-    await send_log(member.guild, f"❌ Member left: {member} ({member.id})")
-
-@bot.event
-async def on_message(message: discord.Message):
-    # automode
-    try:
-        await handle_auto_mode(message)
-    except Exception as e:
-        print("automode error:", e)
-
-    # autoresponder matching
-    if not message.author.bot:
-        txt = message.content.lower()
-        for trigger, resp in AUTORESPONDERS.items():
-            if trigger in txt:
-                try:
-                    await message.channel.send(resp)
-                except Exception:
-                    pass
-                break
-
-    # leveling xp (simple)
-    try:
-        uid = message.author.id
-        USER_XP[uid] = USER_XP.get(uid, 0) + random.randint(5, 12)
-        new_lvl = USER_XP[uid] // 100
-        if LEVELS.get(uid, 0) < new_lvl:
-            LEVELS[uid] = new_lvl
-            try:
-                await message.channel.send(f"🎉 {message.author.mention} đã lên cấp {new_lvl}!")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    await bot.process_commands(message)
-
-# -------------------------
-# AUTORESPONDER (slash + prefix)
-# -------------------------
-@tree.command(name="add", description="Thêm autoresponder (trigger -> response)")
-@app_commands.describe(trigger="Trigger substring", response="Bot response")
-async def slash_add(interaction: discord.Interaction, trigger: str, response: str):
-    AUTORESPONDERS[trigger.lower()] = response
-    await interaction.response.send_message(f"✅ Added: `{trigger}` → {response}", ephemeral=True)
-
-@tree.command(name="remove", description="Xóa autoresponder theo trigger")
-@app_commands.describe(trigger="Trigger to remove")
-async def slash_remove(interaction: discord.Interaction, trigger: str):
-    if trigger.lower() in AUTORESPONDERS:
-        del AUTORESPONDERS[trigger.lower()]
-        await interaction.response.send_message(f"🗑️ Removed `{trigger}`", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ Trigger not found.", ephemeral=True)
-
-@tree.command(name="list", description="List all autoresponders")
-async def slash_list(interaction: discord.Interaction):
-    if not AUTORESPONDERS:
-        await interaction.response.send_message("📭 No autoresponders.", ephemeral=True)
+@client.event
+async def on_message(message):
+    if message.author == client.user:
         return
-    text = "\n".join([f"`{k}` → {v}" for k, v in AUTORESPONDERS.items()])
-    if len(text) > 1800:
-        fname = "autoresponders.txt"
-        with open(fname, "w", encoding="utf-8") as f:
-            f.write(text)
-        await interaction.response.send_message("📄 List attached.", file=discord.File(fname), ephemeral=True)
-    else:
-        await interaction.response.send_message(f"📋 {text}", ephemeral=True)
 
-@bot.command(name="add")
-async def pfx_add(ctx: commands.Context, trigger: str, *, response: str):
-    AUTORESPONDERS[trigger.lower()] = response
-    await ctx.send(f"✅ Added: `{trigger}` → {response}")
+    # Prefix Command !mahoa
+    if message.content.startswith('!mahoa'):
+        user_id = message.author.id
+        
+        encryption_sessions[user_id] = {
+            'step': 'waiting_source',
+            'created_at': datetime.now(),
+            'type': 'prefix'
+        }
+        
+        embed = discord.Embed(
+            title="🔐 **MÃ HÓA SOURCE CODE**",
+            description="**Vui lòng gửi source code của bạn để tiến hành mã hóa**",
+            color=0x5865F2,
+            timestamp=datetime.now()
+        )
+        embed.add_field(
+            name="📤 Cách gửi:",
+            value="• Gửi code trực tiếp trong tin nhắn\n• Hoặc attach file (.txt, .py, .js, .java, .cpp, v.v.)",
+            inline=False
+        )
+        embed.add_field(
+            name="🔒 Thuật toán:",
+            value="AES-256-GCM với PBKDF2",
+            inline=True
+        )
+        embed.add_field(
+            name="⏱️ Thời hạn:",
+            value="5 phút",
+            inline=True
+        )
+        embed.set_footer(text="Hệ thống mã hóa bảo mật cao")
+        
+        await message.reply(embed=embed)
 
-@bot.command(name="remove")
-async def pfx_remove(ctx: commands.Context, trigger: str):
-    if trigger.lower() in AUTORESPONDERS:
-        del AUTORESPONDERS[trigger.lower()]
-        await ctx.send(f"🗑️ Removed `{trigger}`")
-    else:
-        await ctx.send("⚠️ Trigger not found.")
-
-@bot.command(name="list")
-async def pfx_list(ctx: commands.Context):
-    if not AUTORESPONDERS:
-        await ctx.send("📭 No autoresponders.")
-        return
-    text = "\n".join([f"`{k}` → {v}" for k, v in AUTORESPONDERS.items()])
-    await ctx.send(f"📋 {text}")
-
-# -------------------------
-# Moderation & utility commands (real examples)
-# -------------------------
-@tree.command(name="ping", description="Bot latency")
-async def slash_ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"Pong! {round(bot.latency*1000)} ms", ephemeral=True)
-
-@bot.command(name="ping")
-async def ping_cmd(ctx: commands.Context):
-    await ctx.send(f"Pong! {round(bot.latency*1000)} ms")
-
-@tree.command(name="ban", description="Ban member (Admin)")
-@app_commands.describe(member="Member to ban", reason="Reason optional")
-async def slash_ban(interaction: discord.Interaction, member: discord.Member, reason: Optional[str] = None):
-    if not is_admin_inter(interaction):
-        return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-    await interaction.guild.ban(member, reason=reason)
-    await interaction.response.send_message(f"🚫 Banned {member.mention}", ephemeral=False)
-    await send_log(interaction.guild, f"[BAN] {member} by {interaction.user} — {reason}")
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx: commands.Context, member: discord.Member, *, reason: Optional[str] = None):
-    await ctx.guild.ban(member, reason=reason)
-    await ctx.send(f"🚫 Banned {member.mention}")
-
-@tree.command(name="kick", description="Kick member (Admin)")
-@app_commands.describe(member="Member to kick", reason="Reason optional")
-async def slash_kick(interaction: discord.Interaction, member: discord.Member, reason: Optional[str] = None):
-    if not is_admin_inter(interaction):
-        return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-    await interaction.guild.kick(member, reason=reason)
-    await interaction.response.send_message(f"👢 Kicked {member.mention}", ephemeral=False)
-    await send_log(interaction.guild, f"[KICK] {member} by {interaction.user}")
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx: commands.Context, member: discord.Member, *, reason: Optional[str] = None):
-    await ctx.guild.kick(member, reason=reason)
-    await ctx.send(f"👢 Kicked {member.mention}")
-
-@tree.command(name="mute", description="Mute a member (Manage Roles required)")
-@app_commands.describe(member="Member to mute")
-async def slash_mute(interaction: discord.Interaction, member: discord.Member):
-    perms = interaction.user.guild_permissions
-    if not (perms.manage_roles or perms.administrator):
-        return await interaction.response.send_message("⚠️ Manage Roles required.", ephemeral=True)
-    role = await ensure_muted_role(interaction.guild)
-    if not role:
-        return await interaction.response.send_message("❌ Can't create muted role.", ephemeral=True)
-    await member.add_roles(role)
-    await interaction.response.send_message(f"🔇 Muted {member.mention}", ephemeral=False)
-    await send_log(interaction.guild, f"[MUTE] {member} by {interaction.user}")
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def mute(ctx: commands.Context, member: discord.Member):
-    role = await ensure_muted_role(ctx.guild)
-    await member.add_roles(role)
-    await ctx.send(f"🔇 Muted {member.mention}")
-
-@tree.command(name="unmute", description="Unmute a member")
-@app_commands.describe(member="Member to unmute")
-async def slash_unmute(interaction: discord.Interaction, member: discord.Member):
-    role = discord.utils.get(interaction.guild.roles, name=MUTED_ROLE_NAME)
-    if role and role in member.roles:
-        await member.remove_roles(role)
-        await interaction.response.send_message(f"🔊 Unmuted {member.mention}", ephemeral=False)
-        await send_log(interaction.guild, f"[UNMUTE] {member} by {interaction.user}")
-    else:
-        await interaction.response.send_message("⚠️ Member not muted.", ephemeral=True)
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def unmute(ctx: commands.Context, member: discord.Member):
-    role = discord.utils.get(ctx.guild.roles, name=MUTED_ROLE_NAME)
-    if role and role in member.roles:
-        await member.remove_roles(role)
-        await ctx.send(f"🔊 Unmuted {member.mention}")
-    else:
-        await ctx.send("⚠️ Member not muted.")
-
-@tree.command(name="clear", description="Clear messages (Admin)")
-@app_commands.describe(limit="How many to delete (max 100)")
-async def slash_clear(interaction: discord.Interaction, limit: int = 10):
-    if not is_admin_inter(interaction):
-        return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-    limit = max(1, min(limit, 100))
-    deleted = await interaction.channel.purge(limit=limit)
-    await interaction.response.send_message(f"🧹 Deleted {len(deleted)} messages.", ephemeral=True)
-    await send_log(interaction.guild, f"[CLEAR] {len(deleted)} messages by {interaction.user} in {interaction.channel}")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def clear(ctx: commands.Context, limit: int = 10):
-    limit = max(1, min(limit, 100))
-    deleted = await ctx.channel.purge(limit=limit)
-    await ctx.send(f"🧹 Deleted {len(deleted)} messages", delete_after=5)
-
-# say / announce
-@tree.command(name="say", description="Bot sends a message to channel (Admin)")
-@app_commands.describe(channel="Channel", message="Message text")
-async def slash_say(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
-    if not is_admin_inter(interaction):
-        return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-    await channel.send(message)
-    await interaction.response.send_message("✅ Sent.", ephemeral=True)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def say(ctx: commands.Context, channel: discord.TextChannel, *, message: str):
-    await channel.send(message)
-    await ctx.send("✅ Sent.", delete_after=5)
-
-# masssend and giveaway already provided as examples earlier (prefix + slash)
-# masssend prefix:
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def masssend(ctx: commands.Context, channel: discord.TextChannel, count: int, delay: int, *, message: str):
-    count = max(1, min(5, count))
-    delay = max(0, delay)
-    await ctx.send(f"📤 Sending {count} messages to {channel.mention} ...")
-    for _ in range(count):
-        await channel.send(message)
-        await asyncio.sleep(delay)
-    await ctx.send("✅ Done.")
-
-# giveaway prefix:
-@bot.command()
-async def giveaway_cmd(ctx: commands.Context, channel: discord.TextChannel, duration: int, winners: int, *, prize: str):
-    await ctx.send(f"🎉 Giveaway starting in {channel.mention} for **{prize}**")
-    asyncio.create_task(run_giveaway(channel, duration, winners, prize, ctx.author.display_name))
-
-async def run_giveaway(channel: discord.TextChannel, duration: int, winners: int, prize: str, host_name: str):
-    embed = discord.Embed(title="🎉 GIVEAWAY", description=f"**Prize:** {prize}\nReact with 🎉 to enter. Ends in {duration}s")
-    embed.set_footer(text=f"Hosted by {host_name}")
-    msg = await channel.send(embed=embed)
-    await msg.add_reaction("🎉")
-    await asyncio.sleep(duration)
-    msg = await channel.fetch_message(msg.id)
-    users = set()
-    for reaction in msg.reactions:
-        if reaction.emoji == "🎉":
-            async for u in reaction.users():
-                if not u.bot:
-                    users.add(u)
-    if not users:
-        await channel.send("No participants.")
-        return
-    winners_list = random.sample(list(users), k=min(winners, len(users)))
-    await channel.send(f"🏆 Winners: {', '.join(w.mention for w in winners_list)} — Prize: **{prize}**")
-
-# uplevel / level commands (already above for prefix/slash)
-@tree.command(name="uplevel", description="Add points/level to a member (Admin)")
-@app_commands.describe(member="Member", amount="Amount to add")
-async def slash_uplevel(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if not is_admin_inter(interaction):
-        return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-    LEVELS[member.id] = LEVELS.get(member.id, 0) + amount
-    await interaction.response.send_message(f"✅ {member.mention} +{amount}. Now: {LEVELS[member.id]}", ephemeral=False)
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def uplevel_cmd(ctx: commands.Context, member: discord.Member, amount: int):
-    LEVELS[member.id] = LEVELS.get(member.id, 0) + amount
-    await ctx.send(f"✅ {member.mention} +{amount}. Now {LEVELS[member.id]}")
-
-# -------------------------
-# DYNAMIC PLACEHOLDERS (SAFE)
-# create admin_1..admin_100 and fun_1..fun_50 both as prefix and slash commands
-# using function factories so closure captures name correctly
-# -------------------------
-def make_prefix_admin(name: str):
-    async def cmd(ctx: commands.Context, *args):
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("⚠️ Admin only.")
+    # Xử lý source code từ người dùng
+    elif message.author.id in encryption_sessions:
+        user_id = message.author.id
+        session = encryption_sessions[user_id]
+        
+        # Kiểm tra timeout
+        if datetime.now() - session['created_at'] > timedelta(minutes=5):
+            del encryption_sessions[user_id]
+            await message.reply("❌ **Session đã hết hạn!** Vui lòng sử dụng lệnh lại.")
             return
-        await ctx.send(f"🛠 Placeholder admin `{name}` executed by {ctx.author.mention}. Args: {args}")
-    return cmd
 
-def make_slash_admin(name: str):
-    async def callback(interaction: discord.Interaction):
-        if not is_admin_inter(interaction):
-            return await interaction.response.send_message("⚠️ Admin only.", ephemeral=True)
-        await interaction.response.send_message(f"🛠 Placeholder admin `{name}` executed by {interaction.user.mention}", ephemeral=True)
-    return callback
+        if session['step'] == 'waiting_source':
+            try:
+                # Lấy source code
+                source_content = ""
+                file_used = False
+                
+                if message.attachments:
+                    for attachment in message.attachments:
+                        valid_extensions = ['.txt', '.py', '.js', '.java', '.cpp', '.c', '.html', '.css', '.php', '.md', '.json', '.xml']
+                        if any(attachment.filename.endswith(ext) for ext in valid_extensions):
+                            file_content = await attachment.read()
+                            source_content = file_content.decode('utf-8')
+                            file_used = True
+                            break
+                    else:
+                        await message.reply("❌ **Không tìm thấy file văn bản hợp lệ!**")
+                        return
+                else:
+                    source_content = message.content
 
-def make_prefix_fun(name: str):
-    async def cmd(ctx: commands.Context, *args):
-        await ctx.send(f"🎲 Placeholder fun `{name}` — args: {args}")
-    return cmd
+                if not source_content.strip():
+                    await message.reply("❌ **Source code không được để trống!**")
+                    return
 
-def make_slash_fun(name: str):
-    async def callback(interaction: discord.Interaction):
-        await interaction.response.send_message(f"🎲 Placeholder fun `{name}`", ephemeral=True)
-    return callback
+                # Lưu source và chuyển sang bước mật khẩu
+                session['source_content'] = source_content
+                session['step'] = 'waiting_password'
+                session['file_used'] = file_used
+                
+                embed = discord.Embed(
+                    title="🔑 **THIẾT LẬP MẬT KHẨU**",
+                    description="Vui lòng nhập mật khẩu để mã hóa:",
+                    color=0xF1C40F
+                )
+                embed.add_field(
+                    name="💡 Yêu cầu:",
+                    value="• Mật khẩu mạnh (tối thiểu 4 ký tự)\n• **LƯU Ý:** Không thể khôi phục nếu quên mật khẩu!",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📊 Kích thước source:",
+                    value=f"{len(source_content):,} ký tự",
+                    inline=True
+                )
+                embed.add_field(
+                    name="📁 Loại:",
+                    value="File" if file_used else "Text",
+                    inline=True
+                )
+                
+                await message.reply(embed=embed)
+                
+            except Exception as e:
+                await message.reply(f"❌ **Lỗi xử lý:** {str(e)}")
+                if user_id in encryption_sessions:
+                    del encryption_sessions[user_id]
 
-# register admin placeholders
-for i in range(1, 101):
-    n = f"admin{i}"
-    bot.command(name=n)(make_prefix_admin(n))
-    # register slash command via tree.add_command using Command object
-    cmd = app_commands.Command(name=n, description=f"Placeholder admin command {n}", callback=make_slash_admin(n))
+        elif session['step'] == 'waiting_password':
+            password = message.content.strip()
+            
+            if len(password) < 4:
+                await message.reply("❌ **Mật khẩu quá ngắn!** Tối thiểu 4 ký tự.")
+                return
+            
+            # Thông báo đang mã hóa
+            processing_msg = await message.reply("🛡️ **Đang mã hóa source code với AES-256-GCM...**")
+            
+            try:
+                # Mã hóa source code
+                source_bytes = session['source_content'].encode('utf-8')
+                encrypted_data = AESEncryption.encrypt_aes_gcm(source_bytes, password)
+                
+                # Tạo file kết quả
+                result_data = {
+                    'encryption_info': {
+                        'algorithm': 'AES-256-GCM',
+                        'key_derivation': 'PBKDF2-SHA256-100000',
+                        'created_at': datetime.now().isoformat(),
+                        'data_size': len(source_bytes),
+                        'original_type': 'file' if session['file_used'] else 'text'
+                    },
+                    'encrypted_data': encrypted_data
+                }
+                
+                result_json = json.dumps(result_data, indent=2)
+                
+                # Tạo filename với timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                encrypted_file = discord.File(
+                    fp=discord.BytesIO(result_json.encode('utf-8')),
+                    filename=f"encrypted_source_{timestamp}.secure"
+                )
+                
+                # Embed kết quả
+                embed = discord.Embed(
+                    title="✅ **MÃ HÓA THÀNH CÔNG**",
+                    description="Source code của bạn đã được mã hóa bảo mật!",
+                    color=0x2ECC71,
+                    timestamp=datetime.now()
+                )
+                embed.add_field(
+                    name="🔐 Thuật toán",
+                    value="AES-256-GCM",
+                    inline=True
+                )
+                embed.add_field(
+                    name="📊 Kích thước gốc",
+                    value=f"{len(source_bytes):,} bytes",
+                    inline=True
+                )
+                embed.add_field(
+                    name="🔑 Bảo mật",
+                    value="PBKDF2 100,000 iterations",
+                    inline=True
+                )
+                embed.add_field(
+                    name="💾 File output",
+                    value=f"encrypted_source_{timestamp}.secure",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📝 Lưu ý quan trọng",
+                    value="• **LƯU LẠI MẬT KHẨU** để giải mã sau này\n• Không thể khôi phục nếu mất mật khẩu\n• File chứa dữ liệu mã hóa an toàn",
+                    inline=False
+                )
+                embed.set_footer(text="Hệ thống mã hóa AES-256-GCM")
+                
+                # Gửi kết quả
+                try:
+                    await message.author.send(
+                        content=f"🔐 **Source code đã được mã hóa thành công!**\n**Mật khẩu bạn dùng:** ||{password}||\n\n*Lưu ý: Giữ kín mật khẩu này để bảo vệ dữ liệu*",
+                        embed=embed,
+                        file=encrypted_file
+                    )
+                    await processing_msg.edit(content="✅ **Mã hóa hoàn tất! Source code đã mã hóa đã được gửi đến tin nhắn riêng của bạn.**")
+                except discord.Forbidden:
+                    await processing_msg.edit(content="❌ **Không thể gửi tin nhắn riêng!** Vui lòng bật DM với bot và thử lại.")
+                
+            except Exception as e:
+                await processing_msg.edit(content=f"❌ **Lỗi mã hóa:** {str(e)}")
+            
+            finally:
+                # Dọn dẹp session
+                if user_id in encryption_sessions:
+                    del encryption_sessions[user_id]
+
+    # Lệnh hủy
+    elif message.content.startswith('!huy'):
+        user_id = message.author.id
+        if user_id in encryption_sessions:
+            del encryption_sessions[user_id]
+            await message.reply("❌ **Đã hủy session mã hóa hiện tại.**")
+
+    # Lệnh kiểm tra trạng thái bot
+    elif message.content.startswith('!status'):
+        uptime = datetime.now() - bot_start_time
+        hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        embed = discord.Embed(
+            title="🤖 **TRẠNG THÁI BOT**",
+            color=0x7289DA,
+            timestamp=datetime.now()
+        )
+        embed.add_field(
+            name="🟢 Trạng thái",
+            value="Online ✅",
+            inline=True
+        )
+        embed.add_field(
+            name="⏰ Uptime",
+            value=f"{hours}h {minutes}m {seconds}s",
+            inline=True
+        )
+        embed.add_field(
+            name="📊 Servers",
+            value=f"{len(client.guilds)} server(s)",
+            inline=True
+        )
+        embed.add_field(
+            name="🛠️ Tính năng",
+            value="Mã hóa AES-256-GCM",
+            inline=True
+        )
+        embed.add_field(
+            name="🔗 Hosting",
+            value="Render + Keep Alive",
+            inline=True
+        )
+        embed.set_footer(text=f"Bot ID: {client.user.id}")
+        
+        await message.reply(embed=embed)
+
+# Xử lý lỗi
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    print(f"Lỗi slash command: {error}")
+    if isinstance(error, app_commands.CommandNotFound):
+        return
+    
     try:
-        tree.add_command(cmd)
-    except Exception:
-        # ignore if already added (reload)
+        await interaction.response.send_message("❌ Có lỗi xảy ra khi thực hiện lệnh!", ephemeral=True)
+    except:
         pass
 
-# register fun placeholders
-for i in range(1, 51):
-    n = f"fun{i}"
-    bot.command(name=n)(make_prefix_fun(n))
-    cmd = app_commands.Command(name=n, description=f"Placeholder fun command {n}", callback=make_slash_fun(n))
-    try:
-        tree.add_command(cmd)
-    except Exception:
-        pass
-
-# -------------------------
-# RUN
-# -------------------------
+# Chạy bot
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    try:
+        print("🚀 Đang khởi động bot mã hóa với Keep Alive...")
+        print("📡 Flask server đang chạy trên port 8080")
+        client.run(TOKEN)
+    except discord.LoginFailure:
+        print("❌ Token không hợp lệ! Kiểm tra DISCORD_BOT_TOKEN.")
+    except Exception as e:
+        print(f"❌ Lỗi khởi động: {e}")
