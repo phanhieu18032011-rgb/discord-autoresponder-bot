@@ -45,6 +45,7 @@ class DeltaBypassSystem:
 import discord
 from discord.ext import commands
 import asyncio
+import aiohttp
 import requests
 import json
 import time
@@ -73,26 +74,6 @@ class DeltaBypass:
             return response.status_code == 200
         except:
             return True
-    
-    def emulate_delta_client(self):
-        '''Emulate Delta client behavior'''
-        gateway_data = {
-            "op": 2,
-            "d": {
-                "token": self.token,
-                "properties": {
-                    "$os": "windows",
-                    "$browser": "Discord Client",
-                    "$device": "desktop",
-                    "$referrer": "",
-                    "$referring_domain": ""
-                },
-                "compress": False,
-                "large_threshold": 250,
-                "v": 3
-            }
-        }
-        return gateway_data
 
 # SHADOW BYPASS BOT
 def create_bypass_bot(token, log_webhook_url=None):
@@ -142,7 +123,7 @@ def create_bypass_bot(token, log_webhook_url=None):
         await update_presence()
         
         # Send startup log
-        await send_log(f"**🚀 Bot Started Successfully**\\n**🆔 Bot ID:** {bot.user.id}\\n**📊 Guilds:** {len(bot.guilds)}", 0x00ff00)
+        await send_log(f"**🚀 Bot Started Successfully**\\\\n**🆔 Bot ID:** {bot.user.id}\\\\n**📊 Guilds:** {len(bot.guilds)}", 0x00ff00)
 
     async def update_presence():
         '''Update bot presence based on current status'''
@@ -180,7 +161,7 @@ def create_bypass_bot(token, log_webhook_url=None):
         await ctx.send(embed=embed)
         
         # Log command usage
-        await send_log(f"**📋 Command Used:** `delta`\\n**👤 User:** {ctx.author}")
+        await send_log(f"**📋 Command Used:** `delta`\\\\n**👤 User:** {ctx.author}")
 
     @bot.command()
     async def shadow(ctx):
@@ -247,7 +228,7 @@ def create_bypass_bot(token, log_webhook_url=None):
         await ctx.send(embed=embed)
         
         # Log status change
-        await send_log(f"**🔧 Status Changed**\\n**📊 From:** {old_status.upper()}\\n**📈 To:** {current_status.upper()}\\n**🎮 Activity:** {current_activity}")
+        await send_log(f"**🔧 Status Changed**\\\\n**📊 From:** {old_status.upper()}\\\\n**📈 To:** {current_status.upper()}\\\\n**🎮 Activity:** {current_activity}")
 
     @bot.command()
     async def uptime(ctx):
@@ -264,12 +245,12 @@ def create_bypass_bot(token, log_webhook_url=None):
     @bot.event
     async def on_guild_join(guild):
         '''Log when bot joins a guild'''
-        await send_log(f"**📥 Joined Guild**\\n**🏠 Name:** {guild.name}\\n**🆔 ID:** {guild.id}\\n**👥 Members:** {guild.member_count}", 0x00ff00)
+        await send_log(f"**📥 Joined Guild**\\\\n**🏠 Name:** {guild.name}\\\\n**🆔 ID:** {guild.id}\\\\n**👥 Members:** {guild.member_count}", 0x00ff00)
 
     @bot.event
     async def on_guild_remove(guild):
         '''Log when bot leaves a guild'''
-        await send_log(f"**📤 Left Guild**\\n**🏠 Name:** {guild.name}\\n**🆔 ID:** {guild.id}", 0xff0000)
+        await send_log(f"**📤 Left Guild**\\\\n**🏠 Name:** {guild.name}\\\\n**🆔 ID:** {guild.id}", 0xff0000)
 
     return bot
 
@@ -307,10 +288,10 @@ if __name__ == '__main__':
         
         return bot_folder
 
-    def start_delta_bypass(self, token, user_id, log_channel):
-        '''Start delta bypass bot with logging'''
+    async def start_delta_bypass(self, token, user_id, log_channel):
+        '''Start delta bypass bot with logging - PROPER ASYNC'''
         try:
-            # Create webhook for logging
+            # Create webhook for logging - FIXED AWAIT
             webhook = await log_channel.create_webhook(name=f"DeltaLogs_{user_id}")
             log_webhook_url = webhook.url
             
@@ -393,11 +374,12 @@ async def handle_delta_hosting(ctx, token: str):
     # Start delta bypass
     embed = discord.Embed(
         title="🚀 ACTIVATING DELTA BYPASS...",
-        description="```Initializing shadow protocol...\\nBypassing client verification...\\nSetting up logging system...```",
+        description="```Initializing shadow protocol...\\\\nBypassing client verification...\\\\nSetting up logging system...```",
         color=0x0099ff
     )
     loading_msg = await ctx.send(embed=embed)
     
+    # FIXED: Proper async call
     success, result, webhook = await bot.delta_system.start_delta_bypass(token, user_id, log_channel)
     
     if success:
@@ -417,10 +399,10 @@ async def handle_delta_hosting(ctx, token: str):
         # Send initial log to private channel
         log_embed = discord.Embed(
             title="📊 DELTA BOT LOGGING STARTED",
-            description=f"**Bot hosted by:** {ctx.author.mention}\\n**Start Time:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            description=f"**Bot hosted by:** {ctx.author.mention}\\\\n**Start Time:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             color=0x00ff00
         )
-        log_embed.add_field(name="🔧 Available Commands", value="`!status` - Change bot status\\n`!uptime` - Check uptime\\n`!delta` - System info\\n`!shadow` - Core info", inline=False)
+        log_embed.add_field(name="🔧 Available Commands", value="`!status` - Change bot status\\\\n`!uptime` - Check uptime\\\\n`!delta` - System info\\\\n`!shadow` - Core info", inline=False)
         log_embed.add_field(name="🔒 Security", value="Delta Bypass Active", inline=True)
         log_embed.add_field(name="🌐 Protocol", value="Client Emulation", inline=True)
         await log_channel.send(embed=log_embed)
@@ -537,12 +519,12 @@ async def delta_help(ctx):
     )
     embed.add_field(
         name="🔧 Hosted Bot Commands",
-        value="`!status` - Change status (online/idle/dnd/invisible)\\n`!uptime` - Check uptime\\n`!delta` - System info\\n`!shadow` - Core info",
+        value="`!status` - Change status (online/idle/dnd/invisible)\\\\n`!uptime` - Check uptime\\\\n`!delta` - System info\\\\n`!shadow` - Core info",
         inline=False
     )
     embed.add_field(
         name="📊 Logging Features",
-        value="• Real-time uptime tracking\\n• Status change logs\\n• Guild join/leave logs\\n• Private log channels\\n• User command tracking",
+        value="• Real-time uptime tracking\\\\n• Status change logs\\\\n• Guild join/leave logs\\\\n• Private log channels\\\\n• User command tracking",
         inline=False
     )
     embed.set_footer(text="Shadow Core V99 - Delta Bypass Protocol")
