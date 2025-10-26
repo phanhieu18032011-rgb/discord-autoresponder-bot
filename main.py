@@ -18,6 +18,10 @@ web_app = Flask(__name__)
 def home():
     return "🤖 SHADOW HOSTING SYSTEM - ONLINE"
 
+@web_app.route('/health')
+def health_check():
+    return "🟢 SYSTEM OPERATIONAL"
+
 def run_web_server():
     """Run Flask app for port binding"""
     web_app.run(host='0.0.0.0', port=8080, debug=False)
@@ -26,9 +30,9 @@ def run_web_server():
 web_thread = threading.Thread(target=run_web_server, daemon=True)
 web_thread.start()
 
-# SHADOW CORE CONFIG
+# SHADOW CORE CONFIG - DUAL PREFIX SUPPORT
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=['/', '!'], intents=intents, help_command=None)
 
 # ACTIVE BOTS REGISTRY
 active_bots = defaultdict(dict)
@@ -63,6 +67,7 @@ class BotHostingSystem:
 async def on_ready():
     print(f'🎯 SHADOW HOST MASTER ONLINE: {bot.user}')
     print(f'🌐 Web server running on port 8080')
+    print(f'⚡ Dual prefix activated: / and !')
     bot.hosting_system = BotHostingSystem()
 
 class BotHostingSession:
@@ -154,17 +159,41 @@ if __name__ == '__main__':
 hosting_sessions = {}
 
 @bot.command(name='DRG_hosting_bot')
-async def start_hosting(ctx, token: str):
-    """Initialize bot hosting session"""
+async def start_hosting_slash(ctx, token: str):
+    """Initialize bot hosting session via / command"""
+    await handle_hosting_start(ctx, token)
+
+@bot.command(name='hosting')
+async def start_hosting_exclamation(ctx, token: str):
+    """Initialize bot hosting session via ! command"""
+    await handle_hosting_start(ctx, token)
+
+async def handle_hosting_start(ctx, token: str):
+    """Core hosting session handler"""
     user_id = ctx.author.id
     
     if user_id in hosting_sessions:
-        await ctx.send("❌ You already have an active hosting session. Type `/done` when finished.")
+        embed = discord.Embed(
+            title="⚠️ SESSION ACTIVE",
+            description="You already have an active hosting session.\n\n"
+                       "**Commands:**\n"
+                       "`/upload <filename> <code>` or `!upload <filename> <code>`\n"
+                       "`/files` or `!files`\n"
+                       "`/done` or `!done`\n"
+                       "`/cancel` or `!cancel`",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed)
         return
     
     # SECURITY: Basic token validation
     if not token.startswith('MT') or len(token) < 50:
-        await ctx.send("❌ Invalid token format. Token must be a valid Discord bot token.")
+        embed = discord.Embed(
+            title="❌ INVALID TOKEN",
+            description="Token must be a valid Discord bot token starting with `MT...`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     # Initialize session
@@ -173,136 +202,309 @@ async def start_hosting(ctx, token: str):
     hosting_sessions[user_id].awaiting_files = True
     
     embed = discord.Embed(
-        title="🤖 SHADOW HOSTING SYSTEM ACTIVE",
+        title="🤖 SHADOW HOSTING SYSTEM ACTIVATED",
         description="**Upload your bot files now.**\n\n"
-                   "**Commands:**\n"
-                   "`/upload <filename> <code>` - Upload file\n"
-                   "`/files` - View uploaded files\n"
-                   "`/done` - Start hosting\n"
-                   "`/cancel` - Abort session",
+                   "**Available Commands:**\n"
+                   "`/upload <filename> <code>` or `!upload <filename> <code>`\n"
+                   "`/files` or `!files` - View uploaded files\n"
+                   "`/done` or `!done` - Start hosting\n"
+                   "`/cancel` or `!cancel` - Abort session\n\n"
+                   "**Required Files:**\n"
+                   "• `main.py` - Main bot file\n"
+                   "• Other supporting files (optional)",
         color=0x00ff00
     )
-    embed.add_field(name="⚠️ SECURITY", value="Tokens are encrypted. Files executed in isolated environment.", inline=False)
+    embed.add_field(
+        name="🔒 SECURITY PROTOCOL", 
+        value="```Tokens are encrypted and stored securely\nFiles executed in isolated environment```", 
+        inline=False
+    )
+    embed.set_footer(text=f"Session started for {ctx.author.display_name}")
     
     await ctx.send(embed=embed)
 
 @bot.command(name='upload')
-async def upload_file(ctx, filename: str, *, code: str):
-    """Upload bot file"""
+async def upload_file_slash(ctx, filename: str, *, code: str):
+    """Upload bot file via / command"""
+    await handle_file_upload(ctx, filename, code)
+
+@bot.command(name='upload')
+async def upload_file_exclamation(ctx, filename: str, *, code: str):
+    """Upload bot file via ! command"""
+    await handle_file_upload(ctx, filename, code)
+
+async def handle_file_upload(ctx, filename: str, code: str):
+    """Core file upload handler"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions or not hosting_sessions[user_id].awaiting_files:
-        await ctx.send("❌ No active hosting session. Start with `/DRG_hosting_bot <TOKEN>`")
+        embed = discord.Embed(
+            title="❌ NO ACTIVE SESSION",
+            description="Start a hosting session first:\n"
+                       "`/DRG_hosting_bot <TOKEN>` or `!hosting <TOKEN>`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     # Validate file type
-    if not filename.endswith(('.py', '.txt', '.json', '.env')):
-        await ctx.send("⚠️ Only Python files and config files allowed.")
+    allowed_extensions = ('.py', '.txt', '.json', '.env', '.yml', '.yaml', '.md')
+    if not filename.endswith(allowed_extensions):
+        embed = discord.Embed(
+            title="⚠️ INVALID FILE TYPE",
+            description=f"Allowed extensions: {', '.join(allowed_extensions)}",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed)
         return
     
     hosting_sessions[user_id].add_file(filename, code)
     
     embed = discord.Embed(
-        title="📁 FILE UPLOADED",
+        title="📁 FILE UPLOADED SUCCESSFULLY",
         description=f"**Filename:** `{filename}`\n"
-                   f"**Size:** {len(code)} bytes\n"
-                   f"**Total Files:** {len(hosting_sessions[user_id].files)}",
+                   f"**Size:** `{len(code)}` bytes\n"
+                   f"**Total Files:** `{len(hosting_sessions[user_id].files)}`",
         color=0x0099ff
     )
+    
+    # Show file preview for small files
+    if len(code) < 500:
+        code_preview = code[:100] + "..." if len(code) > 100 else code
+        embed.add_field(
+            name="📝 Preview",
+            value=f"```python\n{code_preview}\n```",
+            inline=False
+        )
     
     await ctx.send(embed=embed)
 
 @bot.command(name='files')
-async def list_files(ctx):
-    """Show uploaded files"""
+async def list_files_slash(ctx):
+    """Show uploaded files via / command"""
+    await handle_list_files(ctx)
+
+@bot.command(name='files')
+async def list_files_exclamation(ctx):
+    """Show uploaded files via ! command"""
+    await handle_list_files(ctx)
+
+async def handle_list_files(ctx):
+    """Core files listing handler"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions:
-        await ctx.send("❌ No active hosting session.")
+        embed = discord.Embed(
+            title="❌ NO ACTIVE SESSION",
+            description="Start a hosting session first:\n"
+                       "`/DRG_hosting_bot <TOKEN>` or `!hosting <TOKEN>`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     files = hosting_sessions[user_id].files
     
     if not files:
-        await ctx.send("📁 No files uploaded yet.")
+        embed = discord.Embed(
+            title="📁 NO FILES UPLOADED",
+            description="Use `/upload <filename> <code>` or `!upload <filename> <code>` to add files",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed)
         return
     
-    embed = discord.Embed(title="📁 UPLOADED FILES", color=0xffaa00)
+    embed = discord.Embed(
+        title="📁 UPLOADED FILES",
+        description=f"**Total Files:** `{len(files)}`\n**Session:** `{ctx.author.display_name}`",
+        color=0x00ff00
+    )
     
     for filename, content in files.items():
+        file_size = len(content)
+        status = "✅" if filename == 'main.py' else "📄"
         embed.add_field(
-            name=f"`{filename}`",
-            value=f"{len(content)} bytes",
+            name=f"{status} `{filename}`",
+            value=f"`{file_size}` bytes",
             inline=True
+        )
+    
+    # Check if main.py exists
+    if 'main.py' not in files:
+        embed.add_field(
+            name="⚠️ REQUIRED FILE MISSING",
+            value="`main.py` is required for hosting",
+            inline=False
         )
     
     await ctx.send(embed=embed)
 
 @bot.command(name='done')
-async def finish_hosting(ctx):
-    """Complete file upload and start hosting"""
+async def finish_hosting_slash(ctx):
+    """Complete file upload and start hosting via / command"""
+    await handle_finish_hosting(ctx)
+
+@bot.command(name='done')
+async def finish_hosting_exclamation(ctx):
+    """Complete file upload and start hosting via ! command"""
+    await handle_finish_hosting(ctx)
+
+async def handle_finish_hosting(ctx):
+    """Core hosting completion handler"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions:
-        await ctx.send("❌ No active hosting session.")
+        embed = discord.Embed(
+            title="❌ NO ACTIVE SESSION",
+            description="Start a hosting session first:\n"
+                       "`/DRG_hosting_bot <TOKEN>` or `!hosting <TOKEN>`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     session = hosting_sessions[user_id]
     
     if not session.files:
-        await ctx.send("❌ No files uploaded. Add files with `/upload <filename> <code>`")
+        embed = discord.Embed(
+            title="❌ NO FILES UPLOADED",
+            description="Add files with:\n`/upload <filename> <code>` or `!upload <filename> <code>`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     # Validate main bot file exists
     if 'main.py' not in session.files:
-        await ctx.send("❌ `main.py` is required for bot hosting.")
+        embed = discord.Embed(
+            title="❌ MISSING REQUIRED FILE",
+            description="`main.py` is required for bot hosting.\n\n"
+                       "Upload it with:\n"
+                       "`/upload main.py <your_bot_code>`",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
         return
     
     # Start hosting process
-    await ctx.send("🚀 **Starting bot hosting...**")
+    loading_embed = discord.Embed(
+        title="🚀 STARTING BOT HOSTING...",
+        description="```Initializing environment...\nSecuring token...\nLoading files...```",
+        color=0x0099ff
+    )
+    loading_msg = await ctx.send(embed=loading_embed)
     
     success, result = session.start_bot()
     
     if success:
-        embed = discord.Embed(
+        success_embed = discord.Embed(
             title="✅ HOSTING SUCCESSFUL",
-            description="Your bot is now running!",
+            description="Your bot is now running in isolated environment!",
             color=0x00ff00
         )
-        embed.add_field(name="📊 Status", value="🟢 ONLINE", inline=True)
-        embed.add_field(name="📁 Files", value=f"{len(session.files)} files", inline=True)
-        embed.add_field(name="🔒 Security", value="Isolated Environment", inline=True)
+        success_embed.add_field(name="📊 Status", value="🟢 ONLINE", inline=True)
+        success_embed.add_field(name="📁 Files", value=f"`{len(session.files)}` files", inline=True)
+        success_embed.add_field(name="🔒 Security", value="Isolated Environment", inline=True)
+        success_embed.add_field(
+            name="🌐 Web Interface", 
+            value="`http://localhost:8081`", 
+            inline=True
+        )
+        success_embed.set_footer(text="Bot hosted via SHADOW CORE SYSTEM")
     else:
-        embed = discord.Embed(
+        success_embed = discord.Embed(
             title="❌ HOSTING FAILED",
-            description=str(result),
+            description=f"```{str(result)}```",
             color=0xff0000
         )
     
     # Cleanup session
     del hosting_sessions[user_id]
     
-    await ctx.send(embed=embed)
+    await loading_msg.edit(embed=success_embed)
 
 @bot.command(name='cancel')
-async def cancel_hosting(ctx):
-    """Cancel current hosting session"""
+async def cancel_hosting_slash(ctx):
+    """Cancel current hosting session via / command"""
+    await handle_cancel_hosting(ctx)
+
+@bot.command(name='cancel')
+async def cancel_hosting_exclamation(ctx):
+    """Cancel current hosting session via ! command"""
+    await handle_cancel_hosting(ctx)
+
+async def handle_cancel_hosting(ctx):
+    """Core session cancellation handler"""
     user_id = ctx.author.id
     
     if user_id in hosting_sessions:
+        files_count = len(hosting_sessions[user_id].files)
         del hosting_sessions[user_id]
-        await ctx.send("❌ Hosting session cancelled.")
+        
+        embed = discord.Embed(
+            title="❌ HOSTING SESSION CANCELLED",
+            description=f"Deleted `{files_count}` uploaded files\nSession cleared successfully",
+            color=0xffaa00
+        )
+        await ctx.send(embed=embed)
     else:
-        await ctx.send("❌ No active hosting session.")
+        embed = discord.Embed(
+            title="❌ NO ACTIVE SESSION",
+            description="No hosting session to cancel",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
+
+@bot.command(name='help_hosting')
+async def help_hosting_slash(ctx):
+    """Show hosting help via / command"""
+    await handle_help_hosting(ctx)
+
+@bot.command(name='help_hosting')
+async def help_hosting_exclamation(ctx):
+    """Show hosting help via ! command"""
+    await handle_help_hosting(ctx)
+
+async def handle_help_hosting(ctx):
+    """Core help handler"""
+    embed = discord.Embed(
+        title="🤖 SHADOW HOSTING SYSTEM - HELP",
+        description="**Host other Discord bots dynamically**\n\n"
+                   "**Start Hosting Session:**\n"
+                   "`/DRG_hosting_bot <TOKEN>` or `!hosting <TOKEN>`\n\n"
+                   "**File Management:**\n"
+                   "`/upload <filename> <code>` or `!upload <filename> <code>`\n"
+                   "`/files` or `!files` - View uploaded files\n\n"
+                   "**Session Control:**\n"
+                   "`/done` or `!done` - Start hosting\n"
+                   "`/cancel` or `!cancel` - Cancel session\n\n"
+                   "**Requirements:**\n"
+                   "• Valid Discord bot token\n"
+                   "• `main.py` file with bot code\n"
+                   "• Supporting files (optional)",
+        color=0x0099ff
+    )
+    embed.set_footer(text="Dual prefix support: / and !")
+    await ctx.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Missing required arguments.")
+        embed = discord.Embed(
+            title="❌ MISSING ARGUMENTS",
+            description=f"Command: `{ctx.command.name}`\nError: {str(error)}",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
     else:
-        await ctx.send(f"❌ Error: {str(error)}")
+        embed = discord.Embed(
+            title="❌ COMMAND ERROR",
+            description=f"```{str(error)}```",
+            color=0xff0000
+        )
+        await ctx.send(embed=embed)
 
 # SHADOW CORE EXECUTION
 if __name__ == '__main__':
@@ -310,5 +512,9 @@ if __name__ == '__main__':
     if not os.getenv('DISCORD_TOKEN'):
         print("❌ DISCORD_TOKEN environment variable required")
         sys.exit(1)
+    
+    print("🚀 Starting SHADOW HOSTING SYSTEM...")
+    print("🌐 Web server: Port 8080")
+    print("⚡ Discord bot: Dual prefix (/ and !) activated")
     
     bot.run(os.getenv('DISCORD_TOKEN'))
