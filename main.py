@@ -223,18 +223,10 @@ async def handle_hosting_start(ctx, token: str):
     
     await ctx.send(embed=embed)
 
+# SINGLE COMMAND FOR BOTH PREFIXES - NO DUPLICATES
 @bot.command(name='upload')
-async def upload_file_slash(ctx, filename: str, *, code: str):
-    """Upload bot file via / command"""
-    await handle_file_upload(ctx, filename, code)
-
-@bot.command(name='upload')
-async def upload_file_exclamation(ctx, filename: str, *, code: str):
-    """Upload bot file via ! command"""
-    await handle_file_upload(ctx, filename, code)
-
-async def handle_file_upload(ctx, filename: str, code: str):
-    """Core file upload handler"""
+async def upload_file(ctx, filename: str, *, code: str):
+    """Upload bot file - works with both / and ! prefixes"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions or not hosting_sessions[user_id].awaiting_files:
@@ -280,17 +272,8 @@ async def handle_file_upload(ctx, filename: str, code: str):
     await ctx.send(embed=embed)
 
 @bot.command(name='files')
-async def list_files_slash(ctx):
-    """Show uploaded files via / command"""
-    await handle_list_files(ctx)
-
-@bot.command(name='files')
-async def list_files_exclamation(ctx):
-    """Show uploaded files via ! command"""
-    await handle_list_files(ctx)
-
-async def handle_list_files(ctx):
-    """Core files listing handler"""
+async def list_files(ctx):
+    """Show uploaded files - works with both / and ! prefixes"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions:
@@ -340,17 +323,8 @@ async def handle_list_files(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='done')
-async def finish_hosting_slash(ctx):
-    """Complete file upload and start hosting via / command"""
-    await handle_finish_hosting(ctx)
-
-@bot.command(name='done')
-async def finish_hosting_exclamation(ctx):
-    """Complete file upload and start hosting via ! command"""
-    await handle_finish_hosting(ctx)
-
-async def handle_finish_hosting(ctx):
-    """Core hosting completion handler"""
+async def finish_hosting(ctx):
+    """Complete file upload and start hosting - works with both / and ! prefixes"""
     user_id = ctx.author.id
     
     if user_id not in hosting_sessions:
@@ -424,17 +398,8 @@ async def handle_finish_hosting(ctx):
     await loading_msg.edit(embed=success_embed)
 
 @bot.command(name='cancel')
-async def cancel_hosting_slash(ctx):
-    """Cancel current hosting session via / command"""
-    await handle_cancel_hosting(ctx)
-
-@bot.command(name='cancel')
-async def cancel_hosting_exclamation(ctx):
-    """Cancel current hosting session via ! command"""
-    await handle_cancel_hosting(ctx)
-
-async def handle_cancel_hosting(ctx):
-    """Core session cancellation handler"""
+async def cancel_hosting(ctx):
+    """Cancel current hosting session - works with both / and ! prefixes"""
     user_id = ctx.author.id
     
     if user_id in hosting_sessions:
@@ -456,17 +421,8 @@ async def handle_cancel_hosting(ctx):
         await ctx.send(embed=embed)
 
 @bot.command(name='help_hosting')
-async def help_hosting_slash(ctx):
-    """Show hosting help via / command"""
-    await handle_help_hosting(ctx)
-
-@bot.command(name='help_hosting')
-async def help_hosting_exclamation(ctx):
-    """Show hosting help via ! command"""
-    await handle_help_hosting(ctx)
-
-async def handle_help_hosting(ctx):
-    """Core help handler"""
+async def help_hosting(ctx):
+    """Show hosting help - works with both / and ! prefixes"""
     embed = discord.Embed(
         title="🤖 SHADOW HOSTING SYSTEM - HELP",
         description="**Host other Discord bots dynamically**\n\n"
