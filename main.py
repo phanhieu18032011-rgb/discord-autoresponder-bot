@@ -8,6 +8,23 @@ import sys
 import threading
 from collections import defaultdict
 import json
+from flask import Flask
+import threading
+
+# WEB SERVER FOR PORT BINDING (Render.com requirement)
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "🤖 SHADOW HOSTING SYSTEM - ONLINE"
+
+def run_web_server():
+    """Run Flask app for port binding"""
+    web_app.run(host='0.0.0.0', port=8080, debug=False)
+
+# START WEB SERVER IN SEPARATE THREAD
+web_thread = threading.Thread(target=run_web_server, daemon=True)
+web_thread.start()
 
 # SHADOW CORE CONFIG
 intents = discord.Intents.all()
@@ -44,7 +61,8 @@ class BotHostingSystem:
 
 @bot.event
 async def on_ready():
-    print(f'SHADOW HOST MASTER ONLINE: {bot.user}')
+    print(f'🎯 SHADOW HOST MASTER ONLINE: {bot.user}')
+    print(f'🌐 Web server running on port 8080')
     bot.hosting_system = BotHostingSystem()
 
 class BotHostingSession:
@@ -70,6 +88,22 @@ import os
 import sys
 import discord
 from discord.ext import commands
+from flask import Flask
+import threading
+
+# Web server for hosted bot
+hosted_web = Flask(__name__)
+
+@hosted_web.route('/')
+def hosted_home():
+    return "🤖 HOSTED BOT - ONLINE"
+
+def run_hosted_web():
+    hosted_web.run(host='0.0.0.0', port=8081, debug=False)
+
+# Start web server
+web_thread = threading.Thread(target=run_hosted_web, daemon=True)
+web_thread.start()
 
 sys.path.append('{bot_folder}')
 os.chdir('{bot_folder}')
@@ -84,7 +118,7 @@ def load_bot():
     
     @bot.event
     async def on_ready():
-        print(f'Hosted Bot Online: {{bot.user}}')
+        print(f'✅ Hosted Bot Online: {{bot.user}}')
     
     # Import main bot logic
     try:
@@ -93,7 +127,11 @@ def load_bot():
     except ImportError:
         pass
     
-    return bot
+    try:
+        from main import bot as imported_bot
+        return imported_bot
+    except ImportError:
+        return bot
 
 if __name__ == '__main__':
     hosted_bot = load_bot()
