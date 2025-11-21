@@ -1,454 +1,307 @@
 import os
-import asyncio
-import json
-from datetime import datetime, timedelta
-
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
+from discord import app_commands
+import asyncio
+import aiohttp
 from aiohttp import web
 
-# --------------------
-# Configuration (use environment variables / secrets)
-# --------------------
-TOKEN = os.getenv('DISCORD_TOKEN')
-OWNER_ID = int(os.getenv('OWNER_ID', '0'))  # Discord user ID of the bot owner (for owner-only commands)
-# warnings file removed
-WARN_FILE = None
-KEEP_ALIVE_PORT = int(os.getenv('KEEP_ALIVE_PORT', '8080'))
+TOKEN = os.getenv("DISCORD_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+PREFIX = "!"
 
-if not TOKEN:
-    raise RuntimeError('DISCORD_TOKEN is not set in environment variables')
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+tree = bot.tree
 
-# --------------------
-# Intents and bot setup
-# --------------------
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.guilds = True
-intents.reactions = True
+# ----------------------------------------
+# Keep Alive HTTP Server
+# ----------------------------------------
+async def handle_root(request):
+    return web.Response(text="Bot alive")
 
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
-
-# --------------------
-# Helpers: persistence for warnings
-# --------------------
-def load_warnings():
-    return {}
-
-def save_warnings(data):
-    pass
-
-warnings_db = {}  # in-memory only
-
-# --------------------
-# Permission checks
-# --------------------
-def is_owner(ctx):
-    return ctx.author.id == OWNER_ID
-
-def mod_check():
-    async def predicate(ctx):
-        # allow if author has kick_members or manage_messages or administrator
-        perms = ctx.author.guild_permissions
-        return perms.kick_members or perms.ban_members or perms.manage_messages or perms.administrator
-    return commands.check(predicate)
-
-# --------------------
-# Events
-# --------------------
-@bot.event
-async def on_ready():
-    print(f'Bot ready: {bot.user} (ID: {bot.user.id})')
-    status_task.start()
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send('Bạn không có quyền sử dụng lệnh này.')
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send('Thiếu tham số bắt buộc cho lệnh.')
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send('Tham số sai kiểu hoặc không hợp lệ.')
-    else:
-        # For unexpected errors print to console and notify owner
-        print('Unhandled error:', error)
-        try:
-            owner = await bot.fetch_user(OWNER_ID)
-            await owner.send(f'Unhandled error in guild {ctx.guild} command {ctx.command}: {error}')
-        except Exception:
-            pass
-
-# --------------------
-# Status task (keeps bot activity updated)
-# --------------------
-@tasks.loop(minutes=10)
-async def status_task():
-    try:
-        await bot.change_presence(activity=discord.Game(name=f'Practical moderation | Prefix: !'))
-    except Exception:
-        pass
-
-# --------------------
-# Moderation commands (30 commands) - some commands are grouped or aliased
-# --------------------
-
-@bot.command(name='ping')
-async def ping(ctx):
-    """Kiểm tra kết nối bot"""
-    before = datetime.utcnow()
-    msg = await ctx.send('Pinging...')
-    latency_ms = round(bot.latency * 1000)
-    after = datetime.utcnow()
-    delta = (after - before).microseconds // 1000
-    await msg.edit(content=f'Pong! WebSocket: {latency_ms}ms | Response: {delta}ms')
-
-@bot.command(name='kick')
-@mod_check()
-async def kick(ctx, member: discord.Member, *, reason: str = 'No reason provided'):
-    await member.kick(reason=reason)
-    await ctx.send(f'Kicked {member} | {reason}')
-
-@bot.command(name='ban')
-@mod_check()
-async def ban(ctx, member: discord.Member, *, reason: str = 'No reason provided'):
-    await member.ban(reason=reason)
-    await ctx.send(f'Banned {member} | {reason}')
-
-@bot.command(name='unban')
-@mod_check()
-async def unban(ctx, user: discord.User, *, reason: str = 'No reason provided'):
-    await ctx.guild.unban(user, reason=reason)
-    await ctx.send(f'Unbanned {user} | {reason}')
-
-@bot.command(name='tempban')
-@mod_check()
-async def tempban(ctx, member: discord.Member, days: int, *, reason: str = 'No reason provided'):
-    await member.ban(reason=reason)
-    await ctx.send(f'Temporarily banned {member} for {days} day(s) | {reason}')
-    await asyncio.sleep(days * 24 * 3600)
-    try:
-        await ctx.guild.unban(member)
-        await ctx.send(f'Lifted tempban for {member}')
-    except Exception:
-        pass
-
-@bot.command(name='mute')
-@mod_check()
-async def mute(ctx, member: discord.Member, minutes: int = 0, *, reason: str = 'No reason provided'):
-    # create or find role named "Muted"
-    role = discord.utils.get(ctx.guild.roles, name='Muted')
-    if not role:
-        role = await ctx.guild.create_role(name='Muted')
-        for ch in ctx.guild.channels:
-            try:
-                await ch.set_permissions(role, send_messages=False, speak=False, add_reactions=False)
-            except Exception:
-                pass
-    await member.add_roles(role, reason=reason)
-    await ctx.send(f'Muted {member} | {reason}')
-    if minutes > 0:
-        await asyncio.sleep(minutes * 60)
-        try:
-            await member.remove_roles(role)
-            await ctx.send(f'Auto-unmuted {member} after {minutes} minutes')
-        except Exception:
-            pass
-
-@bot.command(name='unmute')
-@mod_check()
-async def unmute(ctx, member: discord.Member, *, reason: str = 'No reason provided'):
-    role = discord.utils.get(ctx.guild.roles, name='Muted')
-    if role:
-        await member.remove_roles(role, reason=reason)
-    await ctx.send(f'Unmuted {member} | {reason}')
-
-@bot.command(name='purge')
-@mod_check()
-async def purge(ctx, amount: int):
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f'Deleted {len(deleted)} messages.', delete_after=5)
-
-@bot.command(name='nick')
-@mod_check()
-async def nick(ctx, member: discord.Member, *, nickname: str = None):
-    await member.edit(nick=nickname)
-    await ctx.send(f'Changed nickname for {member} to {nickname}')
-
-@bot.command(name='warn')
-@mod_check()
-async def warn(ctx, member: discord.Member, *, reason: str = 'Vi phạm'):
-    guild_id = str(ctx.guild.id)
-    member_id = str(member.id)
-    guild_warns = warnings_db.setdefault(guild_id, {})
-    user_warns = guild_warns.setdefault(member_id, [])
-    entry = {'by': ctx.author.id, 'reason': reason, 'time': datetime.utcnow().isoformat()}
-    user_warns.append(entry)
-    save_warnings(warnings_db)
-    await ctx.send(f'Warned {member}. Total warns: {len(user_warns)}')
-
-@bot.command(name='warns')
-@mod_check()
-async def warns(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    guild_id = str(ctx.guild.id)
-    member_id = str(member.id)
-    guild_warns = warnings_db.get(guild_id, {})
-    user_warns = guild_warns.get(member_id, [])
-    if not user_warns:
-        await ctx.send(f'No warns for {member}.')
-        return
-    lines = []
-    for i, w in enumerate(user_warns, 1):
-        lines.append(f"{i}. By: {w['by']} Reason: {w['reason']} Time: {w['time']}")
-    await ctx.send('\n'.join(lines))
-
-@bot.command(name='clearwarns')
-@mod_check()
-async def clearwarns(ctx, member: discord.Member):
-    guild_id = str(ctx.guild.id)
-    member_id = str(member.id)
-    guild_warns = warnings_db.get(guild_id, {})
-    if member_id in guild_warns:
-        del guild_warns[member_id]
-        save_warnings(warnings_db)
-    await ctx.send(f'Cleared warns for {member}.')
-
-@bot.command(name='addrole')
-@mod_check()
-async def addrole(ctx, member: discord.Member, role: discord.Role):
-    await member.add_roles(role)
-    await ctx.send(f'Added role {role.name} to {member}')
-
-@bot.command(name='removerole')
-@mod_check()
-async def removerole(ctx, member: discord.Member, role: discord.Role):
-    await member.remove_roles(role)
-    await ctx.send(f'Removed role {role.name} from {member}')
-
-@bot.command(name='lock')
-@mod_check()
-async def lock(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    overwrite = channel.overwrites_for(ctx.guild.default_role)
-    overwrite.send_messages = False
-    await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
-    await ctx.send(f'Locked {channel.mention}')
-
-@bot.command(name='unlock')
-@mod_check()
-async def unlock(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    overwrite = channel.overwrites_for(ctx.guild.default_role)
-    overwrite.send_messages = None
-    await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
-    await ctx.send(f'Unlocked {channel.mention}')
-
-@bot.command(name='slowmode')
-@mod_check()
-async def slowmode(ctx, seconds: int, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    await channel.edit(slowmode_delay=seconds)
-    await ctx.send(f'Set slowmode to {seconds} seconds in {channel.mention}')
-
-@bot.command(name='prune')
-@mod_check()
-async def prune(ctx, user: discord.Member, amount: int = 100):
-    def is_user(m):
-        return m.author.id == user.id
-    deleted = await ctx.channel.purge(limit=amount, check=is_user)
-    await ctx.send(f'Deleted {len(deleted)} messages from {user}', delete_after=5)
-
-@bot.command(name='announce')
-@mod_check()
-async def announce(ctx, channel: discord.TextChannel, *, message: str):
-    await channel.send(message)
-    await ctx.send('Announcement sent.', delete_after=5)
-
-@bot.command(name='slowban')
-@mod_check()
-async def slowban(ctx, member: discord.Member, delay_seconds: int = 5, *, reason: str = 'No reason'):
-    await ctx.send(f'Banning {member} in {delay_seconds} seconds')
-    await asyncio.sleep(delay_seconds)
-    await member.ban(reason=reason)
-    await ctx.send(f'Banned {member}')
-
-@bot.command(name='clear')
-@mod_check()
-async def clear(ctx, amount: int = 1):
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f'Deleted {len(deleted)} messages.', delete_after=5)
-
-@bot.command(name='serverinfo')
-async def serverinfo(ctx):
-    g = ctx.guild
-    text = (
-        f'Guild: {g.name}\n'
-        f'ID: {g.id}\n'
-        f'Members: {g.member_count}\n'
-        f'Owner: {g.owner}\n'
-        f'Created at: {g.created_at}\n'
-    )
-    await ctx.send(text)
-
-@bot.command(name='userinfo')
-async def userinfo(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    text = (
-        f'User: {member}\n'
-        f'ID: {member.id}\n'
-        f'Joined at: {member.joined_at}\n'
-        f'Created at: {member.created_at}\n'
-        f'Roles: {len(member.roles)-1}\n'
-    )
-    await ctx.send(text)
-
-# Add small convenience aliases to reach roughly 30 moderation/admin operations
-# alias commands: ban, unban, kick, mute, unmute, purge, prune, clear, warn, warns, clearwarns,
-# addrole, removerole, nick, lock, unlock, slowmode, serverinfo, userinfo, announce, tempban, tempmute,
-# slowban, ping, prune, kickban (alias to ban+kick), roleinfo, membercount
-
-@bot.command(name='kickban')
-@mod_check()
-async def kickban(ctx, member: discord.Member, *, reason: str = 'No reason'):
-    await member.kick(reason=reason)
-    await member.ban(reason=reason)
-    await ctx.send(f'Kickbanned {member} | {reason}')
-
-@bot.command(name='roleinfo')
-@mod_check()
-async def roleinfo(ctx, role: discord.Role):
-    await ctx.send(f'Role: {role.name} ID: {role.id} Members: {len(role.members)}')
-
-@bot.command(name='membercount')
-async def membercount(ctx):
-    await ctx.send(f'Member count: {ctx.guild.member_count}')
-
-# --------------------
-# Owner-only commands (9 commands)
-# --------------------
-
-@bot.command(name='shutdown')
-async def shutdown(ctx):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    await ctx.send('Shutting down...')
-    await bot.close()
-
-@bot.command(name='restart')
-async def restart(ctx):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    await ctx.send('Restarting...')
-    await bot.close()
-
-@bot.command(name='dm_host')
-async def dm_host(ctx, *, message: str):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    try:
-        owner = await bot.fetch_user(OWNER_ID)
-        await owner.send(f'Message from bot owner via dm_host command:\n{message}')
-        await ctx.send('Đã gửi tin nhắn tới host.')
-    except Exception as e:
-        await ctx.send(f'Gửi thất bại: {e}')
-
-@bot.command(name='evalpy')
-async def evalpy(ctx, *, code: str):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    # Warning: executing code is dangerous. This command only for the bot owner.
-    try:
-        local = {'bot': bot, 'ctx': ctx, 'discord': discord, 'asyncio': asyncio}
-        exec(f'async def __ex():\n' + '\n'.join(f'    {line}' for line in code.split('\n')), local)
-        result = await local['__ex']()
-        await ctx.send(f'Eval result: {result}')
-    except Exception as e:
-        await ctx.send(f'Eval error: {e}')
-
-@bot.command(name='pull_logs')
-async def pull_logs(ctx):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    await ctx.send('Không còn file logs để gửi. warnings.json đã bị loại bỏ.')
-    # Sends the warnings file as an example of pulling logs
-    try:
-        await ctx.send(file=discord.File(WARN_FILE))
-    except Exception as e:
-        await ctx.send(f'Gửi logs thất bại: {e}')
-
-@bot.command(name='setgame')
-async def setgame(ctx, *, text: str):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    await bot.change_presence(activity=discord.Game(name=text))
-    await ctx.send('Updated presence.')
-
-@bot.command(name='evalraw')
-async def evalraw(ctx, *, code: str):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    try:
-        result = eval(code)
-        await ctx.send(f'Eval result: {result}')
-    except Exception as e:
-        await ctx.send(f'Eval error: {e}')
-
-@bot.command(name='sendraw')
-async def sendraw(ctx, channel_id: int, *, message: str):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    ch = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
-    await ch.send(message)
-    await ctx.send('Sent message.')
-
-@bot.command(name='reload_warnings')
-async def reload_warnings(ctx):
-    if not is_owner(ctx):
-        return await ctx.send('Chỉ owner mới dùng được lệnh này.')
-    global warnings_db
-    warnings_db = load_warnings()
-    await ctx.send('Reloaded warnings from disk.')
-
-# That is 9 owner-only commands: shutdown, restart, dm_host, evalpy, pull_logs, setgame, evalraw, sendraw, reload_warnings
-
-# --------------------
-# Minimal help command
-# --------------------
-@bot.command(name='help')
-async def help_cmd(ctx):
-    lines = [
-        'Commands overview:',
-        'Moderation (examples): kick, ban, unban, tempban, mute, unmute, purge, prune, warn, warns, clearwarns, addrole, removerole, nick, lock, unlock, slowmode, announce, kickban, roleinfo, membercount, serverinfo, userinfo',
-        'Owner only: shutdown, restart, dm_host, evalpy, pull_logs, setgame, evalraw, sendraw, reload_warnings',
-        'Prefix: !'
-    ]
-    await ctx.send('\n'.join(lines))
-
-# --------------------
-# Keep-alive web server for Render / GitHub Pages / Uptime monitoring
-# --------------------
-async def handle_ping(request):
-    return web.Response(text='OK')
-
-async def start_webserver():
+async def start_keep_alive():
     app = web.Application()
-    app.router.add_get('/', handle_ping)
+    app.router.add_get('/', handle_root)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', KEEP_ALIVE_PORT)
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("KEEP_ALIVE_PORT", "8080")))
     await site.start()
-    print(f'Keep-alive web server started on port {KEEP_ALIVE_PORT}')
 
-# --------------------
-# Run both webserver and bot
-# --------------------
-async def main():
-    await start_webserver()
-    await bot.start(TOKEN)
+# ----------------------------------------
+# Helper
+# ----------------------------------------
+def is_owner_ctx(ctx):
+    return ctx.author.id == OWNER_ID
 
-if __name__ == '__main__':
+def is_owner_interaction(interaction):
+    return interaction.user.id == OWNER_ID
+
+# ----------------------------------------
+# 30 PREFIX MOD COMMANDS (!)
+# ----------------------------------------
+# 1
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member, *, reason="No reason"):
+    await member.kick(reason=reason)
+    await ctx.send(f"Kicked {member} Reason: {reason}")
+
+# 2
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def ban(ctx, member: discord.Member, *, reason="No reason"):
+    await member.ban(reason=reason)
+    await ctx.send(f"Banned {member} Reason: {reason}")
+
+# 3
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def unban(ctx, *, user: str):
+    banned = await ctx.guild.bans()
+    name, discrim = user.split("#")
+    for b in banned:
+        if b.user.name == name and b.user.discriminator == discrim:
+            await ctx.guild.unban(b.user)
+            return await ctx.send(f"Unbanned {b.user}")
+    await ctx.send("User not found in ban list")
+
+# 4
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def clear(ctx, amount: int):
+    await ctx.channel.purge(limit=amount+1)
+    await ctx.send(f"Cleared {amount} messages")
+
+# 5
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send("Channel locked")
+
+# 6
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send("Channel unlocked")
+
+# 7
+@bot.command()
+async def ping(ctx):
+    await ctx.send(f"Ping {round(bot.latency*1000)} ms")
+
+# 8
+@bot.command()
+@commands.has_permissions(manage_nicknames=True)
+async def nick(ctx, member: discord.Member, *, nickname):
+    await member.edit(nick=nickname)
+    await ctx.send("Nickname updated")
+
+# 9
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def addrole(ctx, member: discord.Member, role: discord.Role):
+    await member.add_roles(role)
+    await ctx.send("Role added")
+
+# 10
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def removerole(ctx, member: discord.Member, role: discord.Role):
+    await member.remove_roles(role)
+    await ctx.send("Role removed")
+
+# 11
+@bot.command()
+async def server(ctx):
+    g = ctx.guild
+    await ctx.send(f"Server name: {g.name} Members: {g.member_count}")
+
+# 12
+@bot.command()
+async def user(ctx, member: discord.Member=None):
+    member = member or ctx.author
+    await ctx.send(f"User info: {member} ID: {member.id}")
+
+# 13
+@bot.command()
+async def avatar(ctx, member: discord.Member=None):
+    member = member or ctx.author
+    await ctx.send(member.display_avatar.url)
+
+# 14
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def slowmode(ctx, seconds: int):
+    await ctx.channel.edit(slowmode_delay=seconds)
+    await ctx.send(f"Slowmode set to {seconds} seconds")
+
+# 15
+@bot.command()
+@commands.has_permissions(manage_guild=True)
+async def setname(ctx, *, name):
+    await ctx.guild.edit(name=name)
+    await ctx.send("Server name changed")
+
+# 16
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def topic(ctx, *, text):
+    await ctx.channel.edit(topic=text)
+    await ctx.send("Channel topic updated")
+
+# 17
+@bot.command()
+async def id(ctx, member: discord.Member=None):
+    member = member or ctx.author
+    await ctx.send(str(member.id))
+
+# 18
+@bot.command()
+async def channelid(ctx):
+    await ctx.send(str(ctx.channel.id))
+
+# 19
+@bot.command()
+async def serverid(ctx):
+    await ctx.send(str(ctx.guild.id))
+
+# 20
+@bot.command()
+async def roleid(ctx, role: discord.Role):
+    await ctx.send(str(role.id))
+
+# 21
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def pin(ctx):
+    ref = ctx.message.reference
+    if not ref:
+        return await ctx.send("Reply to a message to pin it")
+    msg = await ctx.channel.fetch_message(ref.message_id)
+    await msg.pin()
+    await ctx.send("Message pinned")
+
+# 22
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def unpin(ctx):
+    ref = ctx.message.reference
+    if not ref:
+        return await ctx.send("Reply to a message to unpin it")
+    msg = await ctx.channel.fetch_message(ref.message_id)
+    await msg.unpin()
+    await ctx.send("Message unpinned")
+
+# 23
+@bot.command()
+async def uptime(ctx):
+    await ctx.send("Bot is running")
+
+# 24
+@bot.command()
+async def members(ctx):
+    await ctx.send(f"Members: {ctx.guild.member_count}")
+
+# 25
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def softban(ctx, member: discord.Member, *, reason="No reason"):
+    await member.ban(reason=reason)
+    await member.unban()
+    await ctx.send(f"Softbanned {member}")
+
+# 26
+@bot.command()
+async def bots(ctx):
+    count = sum(1 for m in ctx.guild.members if m.bot)
+    await ctx.send(f"Bots: {count}")
+
+# 27
+@bot.command()
+async def humans(ctx):
+    count = sum(1 for m in ctx.guild.members if not m.bot)
+    await ctx.send(f"Humans: {count}")
+
+# 28
+@bot.command()
+async def pingrole(ctx, role: discord.Role):
+    await ctx.send(role.mention)
+
+# 29
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def clone(ctx):
+    ch = await ctx.channel.clone()
+    await ctx.send(f"Cloned channel {ch.name}")
+
+# 30
+@bot.command()
+async def info(ctx):
+    await ctx.send("Moderation bot online")
+
+# ----------------------------------------
+# 9 OWNER SLASH COMMANDS (/)
+# ----------------------------------------
+@tree.command(name="shutdown", description="Shutdown bot")
+async def shutdown(interaction: discord.Interaction):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    await interaction.response.send_message("Shutting down")
+    await bot.close()
+
+@tree.command(name="restart", description="Restart bot")
+async def restart(interaction: discord.Interaction):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    await interaction.response.send_message("Restarting")
+    await bot.close()
+
+@tree.command(name="dm_host", description="Send a DM to host owner")
+async def dm_host(interaction: discord.Interaction, message: str):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    user = bot.get_user(OWNER_ID)
+    if user:
+        await user.send(message)
+    await interaction.response.send_message("Sent")
+
+@tree.command(name="evalpy", description="Eval python code")
+async def evalpy(interaction: discord.Interaction, code: str):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print('Interrupted')
+        result = eval(code)
+        await interaction.response.send_message(str(result))
+    except Exception as e:
+        await interaction.response.send_message(str(e))
+
+@tree.command(name="evalraw", description="Exec python code")
+async def evalraw(interaction: discord.Interaction, code: str):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    try:
+        exec(code)
+        await interaction.response.send_message("Executed")
+    except Exception as e:
+        await interaction.response.send_message(str(e))
+
+@tree.command(name="sync", description="Sync slash commands")
+async def sync(interaction: discord.Interaction):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    await tree.sync()
+    await interaction.response.send_message("Commands synced")
+
+@tree.command(name="loadext", description="Load extension placeholder")
+async def loadext(interaction: discord.Interaction, name: str):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message("Owner only")
+    await interaction.response.send_message(f"Extension {name} loaded (placeholder)")
+
+@tree.command(name="unloadext", description="Unload extension placeholder")
+async def unloadext(interaction: discord.Interaction, name: str):
+    if not is_owner_interaction(interaction):
+        return await interaction.response.send_message(
