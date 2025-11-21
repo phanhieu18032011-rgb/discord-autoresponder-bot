@@ -1,329 +1,367 @@
 # main.py
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os
-import asyncio
+import requests
 from flask import Flask
-from threading import Thread
+import threading
 
-# --------------------
-# KEEP ALIVE SERVER
-# --------------------
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+maintenance_mode = False
+
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running"
+    return "Bot is running!"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
-    t = Thread(target=run)
+    t = threading.Thread(target=run)
     t.start()
 
-# --------------------
-# BOT SETUP
-# --------------------
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='!', intents=intents)
+def is_owner():
+    async def predicate(ctx):
+        return ctx.author.id == int(os.getenv('OWNER_ID'))
+    return commands.check(predicate)
 
-# Load token from environment variable (set in Render secrets)
-TOKEN = os.environ.get('DISCORD_TOKEN')
+@bot.check
+async def check_maintenance(ctx):
+    if maintenance_mode and ctx.author.id != int(os.getenv('OWNER_ID')):
+        await ctx.send('maintenance mode on.')
+        return False
+    return True
 
-# --------------------
-# MODERATION COMMANDS (30)
-# --------------------
+@bot.event
+async def on_ready():
+    print(f'Logged: {bot.user}')
 
-# 1. kick
+# Lenh 1: kick
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason=None):
     await member.kick(reason=reason)
-    await ctx.send(f"{member} was kicked. Reason: {reason}")
+    await ctx.send(f'kicker {member.mention}')
 
-# 2. ban
+# Lenh 2: ban
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason=None):
     await member.ban(reason=reason)
-    await ctx.send(f"{member} was banned. Reason: {reason}")
+    await ctx.send(f'banner {member.mention}')
 
-# 3. unban
+# Lenh 3: unban
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def unban(ctx, *, member):
-    banned_users = await ctx.guild.bans()
-    member_name, member_discriminator = member.split('#')
-    for ban_entry in banned_users:
+    async for ban_entry in ctx.guild.bans():
         user = ban_entry.user
-        if (user.name, user.discriminator) == (member_name, member_discriminator):
+        if str(user) == member:
             await ctx.guild.unban(user)
-            await ctx.send(f"{user} was unbanned")
+            await ctx.send(f'unbanner {user.mention}')
             return
 
-# 4. mute
+# Lenh 4: mute
 @bot.command()
 @commands.has_permissions(manage_roles=True)
-async def mute(ctx, member: discord.Member):
-    role = discord.utils.get(ctx.guild.roles, name="Muted")
-    if not role:
-        role = await ctx.guild.create_role(name="Muted")
+async def mute(ctx, member: discord.Member, *, reason=None):
+    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
+    if not muted_role:
+        muted_role = await ctx.guild.create_role(name="Muted")
         for channel in ctx.guild.channels:
-            await channel.set_permissions(role, speak=False, send_messages=False)
-    await member.add_roles(role)
-    await ctx.send(f"{member} has been muted")
+            await channel.set_permissions(muted_role, speak=False, send_messages=False)
+    await member.add_roles(muted_role, reason=reason)
+    await ctx.send(f'muter {member.mention}')
 
-# 5. unmute
+# Lenh 5: unmute
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def unmute(ctx, member: discord.Member):
-    role = discord.utils.get(ctx.guild.roles, name="Muted")
-    await member.remove_roles(role)
-    await ctx.send(f"{member} has been unmuted")
+    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
+    await member.remove_roles(muted_role)
+    await ctx.send(f'unmuter {member.mention}')
 
-# 6. clear
+# Lenh 6: warn
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def warn(ctx, member: discord.Member, *, reason):
+    await ctx.send(f'warner {member.mention} {reason}')
+
+# Lenh 7: warnings
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def warnings(ctx, member: discord.Member):
+    await ctx.send(f'warnings {member.mention}: 0')
+
+# Lenh 8: clearwarns
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def clearwarns(ctx, member: discord.Member):
+    await ctx.send(f'clearwarns {member.mention}')
+
+# Lenh 9: clear
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
-    await ctx.channel.purge(limit=amount)
-    await ctx.send(f"Deleted {amount} messages", delete_after=5)
+    await ctx.channel.purge(limit=amount + 1)
+    await ctx.send(f'clear {amount}')
 
-# 7. warn
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def warn(ctx, member: discord.Member, *, reason=None):
-    await ctx.send(f"{member} was warned. Reason: {reason}")
-
-# 8. lockdown
+# Lenh 10: slowmode
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def lockdown(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    await channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    await ctx.send(f"{channel} is now in lockdown mode")
+async def slowmode(ctx, seconds: int):
+    await ctx.channel.edit(slowmode_delay=seconds)
+    await ctx.send(f'slowmode {seconds}')
 
-# 9. unlock
+# Lenh 11: lock
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def unlock(ctx, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    await channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send(f"{channel} is now unlocked")
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send('lock channel')
 
-# 10. slowmode
+# Lenh 12: unlock
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def slowmode(ctx, seconds: int, channel: discord.TextChannel = None):
-    channel = channel or ctx.channel
-    await channel.edit(slowmode_delay=seconds)
-    await ctx.send(f"Slowmode set to {seconds} seconds")
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send('unlock channel')
 
-# 11. announce
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def announce(ctx, *, message):
-    await ctx.send(f"Announcement: {message}")
-
-# 12. addrole
+# Lenh 13: addrole
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def addrole(ctx, member: discord.Member, role: discord.Role):
     await member.add_roles(role)
-    await ctx.send(f"Added {role} to {member}")
+    await ctx.send(f'addrole {role.name} {member.mention}')
 
-# 13. removerole
+# Lenh 14: removerole
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def removerole(ctx, member: discord.Member, role: discord.Role):
     await member.remove_roles(role)
-    await ctx.send(f"Removed {role} from {member}")
+    await ctx.send(f'removerole {role.name} {member.mention}')
 
-# 14. createtext
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def createtext(ctx, name):
-    await ctx.guild.create_text_channel(name)
-    await ctx.send(f"Text channel {name} created")
-
-# 15. createvoice
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def createvoice(ctx, name):
-    await ctx.guild.create_voice_channel(name)
-    await ctx.send(f"Voice channel {name} created")
-
-# 16. deletechannel
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def deletechannel(ctx, channel: discord.TextChannel):
-    await channel.delete()
-    await ctx.send(f"{channel} deleted")
-
-# 17. nickname
+# Lenh 15: nickname
 @bot.command()
 @commands.has_permissions(manage_nicknames=True)
-async def nickname(ctx, member: discord.Member, *, name):
-    await member.edit(nick=name)
-    await ctx.send(f"{member}'s nickname changed to {name}")
+async def nickname(ctx, member: discord.Member, *, nick):
+    await member.edit(nick=nick)
+    await ctx.send(f'nickname {member.mention} {nick}')
 
-# 18. whois
-@bot.command()
-async def whois(ctx, member: discord.Member):
-    await ctx.send(f"{member} info: ID: {member.id}, Name: {member.name}, Joined: {member.joined_at}")
-
-# 19. serverinfo
-@bot.command()
-async def serverinfo(ctx):
-    await ctx.send(f"Server: {ctx.guild.name}, Members: {ctx.guild.member_count}, Owner: {ctx.guild.owner}")
-
-# 20. membercount
-@bot.command()
-async def membercount(ctx):
-    await ctx.send(f"Member count: {ctx.guild.member_count}")
-
-# 21. avatar
-@bot.command()
-async def avatar(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    await ctx.send(member.avatar.url)
-
-# 22. roleinfo
-@bot.command()
-async def roleinfo(ctx, role: discord.Role):
-    await ctx.send(f"Role: {role.name}, ID: {role.id}, Members: {len(role.members)}")
-
-# 23. listroles
-@bot.command()
-async def listroles(ctx):
-    roles = [role.name for role in ctx.guild.roles]
-    await ctx.send("Roles: " + ", ".join(roles))
-
-# 24. channels
-@bot.command()
-async def channels(ctx):
-    ch_list = [ch.name for ch in ctx.guild.channels]
-    await ctx.send("Channels: " + ", ".join(ch_list))
-
-# 25. bans
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def bans(ctx):
-    banned_users = await ctx.guild.bans()
-    await ctx.send(f"Banned users: {[user.user.name for user in banned_users]}")
-
-# 26. boosts
-@bot.command()
-async def boosts(ctx):
-    await ctx.send(f"Server boosts: {ctx.guild.premium_subscription_count}")
-
-# 27. emojis
-@bot.command()
-async def emojis(ctx):
-    await ctx.send(f"Emojis: {[emoji.name for emoji in ctx.guild.emojis]}")
-
-# 28. ping
+# Lenh 16: ping
 @bot.command()
 async def ping(ctx):
-    await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
+    await ctx.send(f'ping {round(bot.latency * 1000)}ms')
 
-# 29. info
+# Lenh 17: serverinfo
 @bot.command()
-async def info(ctx):
-    await ctx.send(f"Bot Name: {bot.user.name}, ID: {bot.user.id}")
+async def serverinfo(ctx):
+    guild = ctx.guild
+    await ctx.send(f'serverinfo {guild.name} {guild.member_count} {guild.id}')
 
-# 30. invite
+# Lenh 18: userinfo
 @bot.command()
-async def invite(ctx):
-    await ctx.send("Bot invite: [your bot invite link here]")
+async def userinfo(ctx, member: discord.Member = None):
+    if not member:
+        member = ctx.author
+    await ctx.send(f'userinfo {member.name} {member.id} {member.created_at}')
 
-# --------------------
-# OWNER ONLY COMMANDS (10)
-# --------------------
-OWNER_ID = int(os.environ.get("OWNER_ID", 0))
+# Lenh 19: channelinfo
+@bot.command()
+async def channelinfo(ctx):
+    channel = ctx.channel
+    await ctx.send(f'channelinfo {channel.name} {channel.id} {channel.type}')
 
-def is_owner():
-    async def predicate(ctx):
-        return ctx.author.id == OWNER_ID
-    return commands.check(predicate)
+# Lenh 20: roleinfo
+@bot.command()
+async def roleinfo(ctx, role: discord.Role):
+    await ctx.send(f'roleinfo {role.name} {role.id} {len(role.members)}')
 
-# 1. dm
+# Lenh 21: purgeuser
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgeuser(ctx, member: discord.Member, amount: int = 10):
+    def check(m):
+        return m.author == member
+    await ctx.channel.purge(limit=amount, check=check)
+    await ctx.send(f'purgeuser {member.mention} {amount}')
+
+# Lenh 22: purgebot
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgebot(ctx, amount: int = 10):
+    def check(m):
+        return m.author.bot
+    await ctx.channel.purge(limit=amount, check=check)
+    await ctx.send(f'purgebot {amount}')
+
+# Lenh 23: purgecontains
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgecontains(ctx, text: str, amount: int = 10):
+    def check(m):
+        return text in m.content
+    await ctx.channel.purge(limit=amount, check=check)
+    await ctx.send(f'purgecontains {text} {amount}')
+
+# Lenh 24: purgestarts
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgestarts(ctx, text: str, amount: int = 10):
+    def check(m):
+        return m.content.startswith(text)
+    await ctx.channel.purge(limit=amount, check=check)
+    await ctx.send(f'purgestarts {text} {amount}')
+
+# Lenh 25: purgeends
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgeends(ctx, text: str, amount: int = 10):
+    def check(m):
+        return m.content.endswith(text)
+    await ctx.channel.purge(limit=amount, check=check)
+    await ctx.send(f'purgeends {text} {amount}')
+
+# Lenh 26: whois
+@bot.command()
+async def whois(ctx, member: discord.Member = None):
+    if not member:
+        member = ctx.author
+    await ctx.send(f'whois {member.name} {member.id} {member.created_at}')
+
+# Lenh 27: avatar
+@bot.command()
+async def avatar(ctx, member: discord.Member = None):
+    if not member:
+        member = ctx.author
+    await ctx.send(member.display_avatar.url)
+
+# Lenh 28: modlog
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def modlog(ctx):
+    await ctx.send('modlog setup')
+
+# Lenh 29: case
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def case(ctx, case_id: int):
+    await ctx.send(f'case {case_id} details')
+
+# Lenh 30: botinfo
+@bot.command()
+async def botinfo(ctx):
+    await ctx.send(f'botinfo {bot.user} {round(bot.latency * 1000)}ms {len(bot.guilds)}')
+
+# Lenh 31: dm
 @bot.command()
 @is_owner()
 async def dm(ctx, member: discord.Member, *, message):
-    await member.send(message)
-    await ctx.send(f"Message sent to {member}")
+    try:
+        await member.send(message)
+        await ctx.send(f'dm {member.mention}')
+    except:
+        await ctx.send('dm failed')
 
-# 2. say
+# Lenh 32: say
 @bot.command()
 @is_owner()
 async def say(ctx, *, message):
+    await ctx.message.delete()
     await ctx.send(message)
 
-# 3. load
+# Lenh 33: servers
 @bot.command()
 @is_owner()
-async def load(ctx, extension):
-    bot.load_extension(extension)
-    await ctx.send(f"Loaded {extension}")
+async def servers(ctx):
+    server_list = '\n'.join([f'{g.name}: {g.id}' for g in bot.guilds[:10]])
+    await ctx.send(f'servers {len(bot.guilds)}\n{server_list}')
 
-# 4. unload
+# Lenh 34: leave
 @bot.command()
 @is_owner()
-async def unload(ctx, extension):
-    bot.unload_extension(extension)
-    await ctx.send(f"Unloaded {extension}")
+async def leave(ctx, guild_id: int):
+    guild = bot.get_guild(guild_id)
+    if guild:
+        await guild.leave()
+        await ctx.send(f'leave {guild.name}')
 
-# 5. reload
+# Lenh 35: broadcast
 @bot.command()
 @is_owner()
-async def reload(ctx, extension):
-    bot.reload_extension(extension)
-    await ctx.send(f"Reloaded {extension}")
+async def broadcast(ctx, *, message):
+    success = 0
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                await channel.send(message)
+                success += 1
+                break
+            except:
+                continue
+    await ctx.send(f'broadcast {success}')
 
-# 6. shutdown
+# Lenh 36: setavatar
 @bot.command()
 @is_owner()
-async def shutdown(ctx):
-    await ctx.send("Shutting down...")
-    await bot.close()
+async def setavatar(ctx, url: str):
+    try:
+        response = requests.get(url)
+        await bot.user.edit(avatar=response.content)
+        await ctx.send('setavatar done')
+    except:
+        await ctx.send('setavatar failed')
 
-# 7. eval
+# Lenh 37: setname
+@bot.command()
+@is_owner()
+async def setname(ctx, *, name: str):
+    try:
+        await bot.user.edit(username=name)
+        await ctx.send(f'setname {name}')
+    except:
+        await ctx.send('setname failed')
+
+# Lenh 38: maintenance
+@bot.command()
+@is_owner()
+async def maintenance(ctx, mode: str):
+    global maintenance_mode
+    if mode.lower() == 'on':
+        maintenance_mode = True
+        await ctx.send('maintenance on')
+    elif mode.lower() == 'off':
+        maintenance_mode = False
+        await ctx.send('maintenance off')
+
+# Lenh 39: eval
 @bot.command()
 @is_owner()
 async def eval(ctx, *, code):
     try:
         result = eval(code)
-        await ctx.send(f"Result: {result}")
+        await ctx.send(f'eval {result}')
     except Exception as e:
-        await ctx.send(f"Error: {e}")
+        await ctx.send(f'eval error {e}')
 
-# 8. exec
+# Lenh 40: shutdown
 @bot.command()
 @is_owner()
-async def exec(ctx, *, code):
-    try:
-        exec(code)
-        await ctx.send("Code executed")
-    except Exception as e:
-        await ctx.send(f"Error: {e}")
-
-# 9. restart
-@bot.command()
-@is_owner()
-async def restart(ctx):
-    await ctx.send("Restarting bot...")
+async def shutdown(ctx):
+    await ctx.send('shutdown')
     await bot.close()
-    os.system("python main.py")
 
-# 10. secret
-@bot.command()
-@is_owner()
-async def secret(ctx):
-    await ctx.send("This is an owner-only secret command")
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    await ctx.send(f'error {str(error)}')
 
-# --------------------
-# RUN BOT
-# --------------------
 keep_alive()
-bot.run(TOKEN)
+bot.run(os.getenv('TOKEN'))
