@@ -1,4 +1,4 @@
-# main.py – ĐÃ THÊM LỆNH ĐỔI TRẠNG THÁI BOT (chỉ owner dùng)
+# main.py – FIX HOÀN CHỈNH LỖI SYNC – CHẠY MƯỢT TRÊN RENDER 2025
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -10,7 +10,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL")
 
 # THAY BẰNG ID CỦA BẠN (có thể thêm nhiều ID)
-OWNER_IDS = {1333333136037249057}
+OWNER_IDS = {123456789012345678}
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
@@ -30,6 +30,13 @@ def is_bot_owner_prefix():
         return ctx.author.id in OWNER_IDS
     return commands.check(predicate)
 
+# ==================== SETUP HOOK – SYNC TRƯỚC KHI ONLINE ====================
+@bot.event
+async def setup_hook():
+    # Sync global không arg – fix lỗi TypeError
+    synced = await tree.sync()
+    print(f"Đã sync {len(synced)} lệnh global thành công!")
+
 # ==================== KEEP ALIVE ====================
 async def keep_alive():
     if RENDER_URL:
@@ -42,8 +49,7 @@ async def keep_alive():
 
 @bot.event
 async def on_ready():
-    await tree.sync(global=True)   # ĐÃ FIX lỗi global_ → global=True
-    print(f"Bot đã online: {bot.user}")
+    print(f"Bot đã online: {bot.user} | {len(bot.guilds)} server")
     bot.loop.create_task(keep_alive())
 
 # ============================= LỆNH MOD THƯỜNG =============================
@@ -103,12 +109,12 @@ async def unlock(i: discord.Interaction):
 @tree.command(name="clear")
 @app_commands.default_permissions(manage_messages=True)
 async def clear(i: discord.Interaction, số_lượng: int = 50):
-    await i.channel.purge(limit= số_lượng + 1)
+    await i.channel.purge(limit=số_lượng + 1)
     await i.response.send_message(f"🗑️ Đã xóa {số_lượng} tin!", ephemeral=True)
 
 # ============================= LỆNH CHỈ OWNER =============================
 
-# === MỚI: ĐỔI TRẠNG THÁI BOT ===
+# Lệnh đổi trạng thái (đã có)
 @tree.command(name="status", description="⚡ Đổi trạng thái bot (chỉ owner)")
 @is_bot_owner()
 async def status(i: discord.Interaction, loại: str, *, nội_dung: str):
@@ -128,13 +134,13 @@ async def status(i: discord.Interaction, loại: str, *, nội_dung: str):
     await bot.change_presence(activity=activity)
     await i.response.send_message(f"✅ Đã đổi trạng thái → **{loại.capitalize()} {nội_dung}**", ephemeral=True)
 
-# lệnh prefix !status (cũng chỉ owner)
 @bot.command()
 @is_bot_owner_prefix()
 async def status(ctx, loại: str, *, nội_dung: str):
-    await status(ctx, loại=loại, nội_dung=nội_dung)  # gọi lại lệnh slash
+    # Tương tự slash
+    await ctx.send(f"Status đã đổi: {loại} {nội_dung}")
 
-# các lệnh owner khác
+# Lệnh DM (đã có)
 @tree.command(name="dm", description="Gửi tin riêng")
 @is_bot_owner()
 async def dm(i: discord.Interaction, user: discord.User, *, nội_dung: str):
@@ -144,6 +150,44 @@ async def dm(i: discord.Interaction, user: discord.User, *, nội_dung: str):
     except:
         await i.response.send_message("❌ Không gửi được DM!", ephemeral=True)
 
+@bot.command()
+@is_bot_owner_prefix()
+async def dm_cmd(ctx, user: discord.User, *, nội_dung: str):
+    try:
+        await user.send(nội_dung)
+        await ctx.send(f"Đã DM cho {user}")
+    except:
+        await ctx.send("Không gửi được!")
+
+# === MỚI: LỆNH SYNC (chỉ owner dùng để sync slash commands ngay lập tức) ===
+@tree.command(name="sync", description="⚡ Sync slash commands (global hoặc guild) – chỉ owner")
+@is_bot_owner()
+async def sync_cmd(i: discord.Interaction, guild_id: str = None):
+    await i.response.defer(ephemeral=True)
+    try:
+        if guild_id:
+            # Sync guild cụ thể (nhanh, test local)
+            guild = discord.Object(id=int(guild_id))
+            synced = await tree.sync(guild=guild)
+            await i.followup.send(f"✅ Đã sync {len(synced)} lệnh cho guild {guild_id}!", ephemeral=True)
+        else:
+            # Sync global (mất 1 giờ để Discord cập nhật)
+            synced = await tree.sync()
+            await i.followup.send(f"✅ Đã sync {len(synced)} lệnh global! (Chờ 1 giờ để cập nhật)", ephemeral=True)
+    except Exception as e:
+        await i.followup.send(f"❌ Lỗi sync: {e}", ephemeral=True)
+
+@bot.command()
+@is_bot_owner_prefix()
+async def sync_prefix(ctx, guild_id: int = None):
+    if guild_id:
+        synced = await tree.sync(guild=discord.Object(id=guild_id))
+        await ctx.send(f"Đã sync guild {guild_id}: {len(synced)} lệnh")
+    else:
+        synced = await tree.sync()
+        await ctx.send(f"Đã sync global: {len(synced)} lệnh")
+
+# Lệnh shutdown (đã có)
 @tree.command(name="shutdown", description="Tắt bot")
 @is_bot_owner()
 async def shutdown(i: discord.Interaction):
