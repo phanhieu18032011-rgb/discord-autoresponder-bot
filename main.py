@@ -5,67 +5,83 @@ import os
 import requests
 from flask import Flask
 import threading
+import logging
 
+# Cau hinh logging
+logging.basicConfig(level=logging.INFO)
+
+# Cau hinh bot
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, case_insensitive=True)
 
+# Maintenance mode
 maintenance_mode = False
 
+# Keep alive server
 app = Flask('')
 
 @app.route('/')
 def home():
     return "Bot is running!"
 
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
 def keep_alive():
-    t = threading.Thread(target=run)
-    t.start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
 
+# Check functions
 def is_owner():
     async def predicate(ctx):
-        return ctx.author.id == int(os.getenv('OWNER_ID'))
+        return ctx.author.id == int(os.getenv('OWNER_ID', 0))
     return commands.check(predicate)
 
-@bot.check
-async def check_maintenance(ctx):
-    if maintenance_mode and ctx.author.id != int(os.getenv('OWNER_ID')):
-        await ctx.send('maintenance mode on.')
-        return False
-    return True
+# Error handler
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    logging.error(f"Error: {error}")
+    await ctx.send(f"error {str(error)}")
 
+# Ready event
 @bot.event
 async def on_ready():
-    print(f'Logged: {bot.user}')
+    print(f'Bot ready: {bot.user}')
+    print(f'Servers: {len(bot.guilds)}')
+    # Clear slash commands to prevent "CommandNotFound" errors
+    try:
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+    except:
+        pass
+
+# === 30 LENH MOD QUAN LI ===
 
 # Lenh 1: kick
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason=None):
     await member.kick(reason=reason)
-    await ctx.send(f'kicker {member.mention}')
+    await ctx.send(f'kick {member.mention}')
 
 # Lenh 2: ban
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason=None):
     await member.ban(reason=reason)
-    await ctx.send(f'banner {member.mention}')
+    await ctx.send(f'ban {member.mention}')
 
 # Lenh 3: unban
 @bot.command()
 @commands.has_permissions(ban_members=True)
-async def unban(ctx, *, member):
+async def unban(ctx, *, member: str):
     async for ban_entry in ctx.guild.bans():
         user = ban_entry.user
         if str(user) == member:
             await ctx.guild.unban(user)
-            await ctx.send(f'unbanner {user.mention}')
+            await ctx.send(f'unban {user.mention}')
             return
+    await ctx.send('user not found')
 
 # Lenh 4: mute
 @bot.command()
@@ -77,7 +93,7 @@ async def mute(ctx, member: discord.Member, *, reason=None):
         for channel in ctx.guild.channels:
             await channel.set_permissions(muted_role, speak=False, send_messages=False)
     await member.add_roles(muted_role, reason=reason)
-    await ctx.send(f'muter {member.mention}')
+    await ctx.send(f'mute {member.mention}')
 
 # Lenh 5: unmute
 @bot.command()
@@ -85,19 +101,19 @@ async def mute(ctx, member: discord.Member, *, reason=None):
 async def unmute(ctx, member: discord.Member):
     muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
     await member.remove_roles(muted_role)
-    await ctx.send(f'unmuter {member.mention}')
+    await ctx.send(f'unmute {member.mention}')
 
 # Lenh 6: warn
 @bot.command()
 @commands.has_permissions(kick_members=True)
-async def warn(ctx, member: discord.Member, *, reason):
-    await ctx.send(f'warner {member.mention} {reason}')
+async def warn(ctx, member: discord.Member, *, reason: str):
+    await ctx.send(f'warn {member.mention} {reason}')
 
 # Lenh 7: warnings
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def warnings(ctx, member: discord.Member):
-    await ctx.send(f'warnings {member.mention}: 0')
+    await ctx.send(f'warnings {member.mention} 0')
 
 # Lenh 8: clearwarns
 @bot.command()
@@ -150,7 +166,7 @@ async def removerole(ctx, member: discord.Member, role: discord.Role):
 # Lenh 15: nickname
 @bot.command()
 @commands.has_permissions(manage_nicknames=True)
-async def nickname(ctx, member: discord.Member, *, nick):
+async def nickname(ctx, member: discord.Member, *, nick: str):
     await member.edit(nick=nick)
     await ctx.send(f'nickname {member.mention} {nick}')
 
@@ -240,39 +256,41 @@ async def whois(ctx, member: discord.Member = None):
 async def avatar(ctx, member: discord.Member = None):
     if not member:
         member = ctx.author
-    await ctx.send(member.display_avatar.url)
+    await ctx.send(f'avatar {member.display_avatar.url}')
 
 # Lenh 28: modlog
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def modlog(ctx):
-    await ctx.send('modlog setup')
+    await ctx.send('modlog setup placeholder')
 
 # Lenh 29: case
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def case(ctx, case_id: int):
-    await ctx.send(f'case {case_id} details')
+    await ctx.send(f'case {case_id} placeholder')
 
 # Lenh 30: botinfo
 @bot.command()
 async def botinfo(ctx):
     await ctx.send(f'botinfo {bot.user} {round(bot.latency * 1000)}ms {len(bot.guilds)}')
 
+# === 10 LENH OWNER ONLY ===
+
 # Lenh 31: dm
 @bot.command()
 @is_owner()
-async def dm(ctx, member: discord.Member, *, message):
+async def dm(ctx, member: discord.Member, *, message: str):
     try:
         await member.send(message)
         await ctx.send(f'dm {member.mention}')
-    except:
-        await ctx.send('dm failed')
+    except Exception as e:
+        await ctx.send(f'dm failed {str(e)}')
 
 # Lenh 32: say
 @bot.command()
 @is_owner()
-async def say(ctx, *, message):
+async def say(ctx, *, message: str):
     await ctx.message.delete()
     await ctx.send(message)
 
@@ -291,11 +309,13 @@ async def leave(ctx, guild_id: int):
     if guild:
         await guild.leave()
         await ctx.send(f'leave {guild.name}')
+    else:
+        await ctx.send('guild not found')
 
 # Lenh 35: broadcast
 @bot.command()
 @is_owner()
-async def broadcast(ctx, *, message):
+async def broadcast(ctx, *, message: str):
     success = 0
     for guild in bot.guilds:
         for channel in guild.text_channels:
@@ -305,18 +325,18 @@ async def broadcast(ctx, *, message):
                 break
             except:
                 continue
-    await ctx.send(f'broadcast {success}')
+    await ctx.send(f'broadcast {success} servers')
 
 # Lenh 36: setavatar
 @bot.command()
 @is_owner()
 async def setavatar(ctx, url: str):
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         await bot.user.edit(avatar=response.content)
         await ctx.send('setavatar done')
-    except:
-        await ctx.send('setavatar failed')
+    except Exception as e:
+        await ctx.send(f'setavatar failed {str(e)}')
 
 # Lenh 37: setname
 @bot.command()
@@ -325,8 +345,8 @@ async def setname(ctx, *, name: str):
     try:
         await bot.user.edit(username=name)
         await ctx.send(f'setname {name}')
-    except:
-        await ctx.send('setname failed')
+    except Exception as e:
+        await ctx.send(f'setname failed {str(e)}')
 
 # Lenh 38: maintenance
 @bot.command()
@@ -339,11 +359,13 @@ async def maintenance(ctx, mode: str):
     elif mode.lower() == 'off':
         maintenance_mode = False
         await ctx.send('maintenance off')
+    else:
+        await ctx.send('usage: maintenance on/off')
 
 # Lenh 39: eval
 @bot.command()
 @is_owner()
-async def eval(ctx, *, code):
+async def eval(ctx, *, code: str):
     try:
         result = eval(code)
         await ctx.send(f'eval {result}')
@@ -357,11 +379,11 @@ async def shutdown(ctx):
     await ctx.send('shutdown')
     await bot.close()
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    await ctx.send(f'error {str(error)}')
-
-keep_alive()
-bot.run(os.getenv('TOKEN'))
+# Chay bot
+if __name__ == '__main__':
+    keep_alive()
+    token = os.getenv('TOKEN')
+    if not token:
+        print("TOKEN not found in environment variables!")
+        exit(1)
+    bot.run(token)
