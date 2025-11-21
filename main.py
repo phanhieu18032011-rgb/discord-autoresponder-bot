@@ -10,7 +10,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL")
 
 # THAY BẰNG ID CỦA BẠN (có thể thêm nhiều ID)
-OWNER_IDS = {123456789012345678}
+OWNER_IDS = {1333333136037249057}
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
