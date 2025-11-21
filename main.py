@@ -6,17 +6,23 @@ import asyncio
 import aiohttp
 from aiohttp import web
 
+# =========================
+# ENV
+# =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 PREFIX = "!"
 
+# =========================
+# BOT INIT
+# =========================
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 tree = bot.tree
 
-# ----------------------------------------
-# Keep Alive HTTP Server
-# ----------------------------------------
+# =========================
+# KEEP ALIVE SERVER
+# =========================
 async def handle_root(request):
     return web.Response(text="Bot alive")
 
@@ -28,18 +34,18 @@ async def start_keep_alive():
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("KEEP_ALIVE_PORT", "8080")))
     await site.start()
 
-# ----------------------------------------
-# Helper
-# ----------------------------------------
+# =========================
+# HELPERS
+# =========================
 def is_owner_ctx(ctx):
     return ctx.author.id == OWNER_ID
 
-def is_owner_interaction(interaction):
+def is_owner_inter(interaction):
     return interaction.user.id == OWNER_ID
 
-# ----------------------------------------
+# ==============================
 # 30 PREFIX MOD COMMANDS (!)
-# ----------------------------------------
+# ==============================
 # 1
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -60,11 +66,11 @@ async def ban(ctx, member: discord.Member, *, reason="No reason"):
 async def unban(ctx, *, user: str):
     banned = await ctx.guild.bans()
     name, discrim = user.split("#")
-    for b in banned:
-        if b.user.name == name and b.user.discriminator == discrim:
-            await ctx.guild.unban(b.user)
-            return await ctx.send(f"Unbanned {b.user}")
-    await ctx.send("User not found in ban list")
+    for entry in banned:
+        if entry.user.name == name and entry.user.discriminator == discrim:
+            await ctx.guild.unban(entry.user)
+            return await ctx.send(f"Unbanned {entry.user}")
+    await ctx.send("User not found")
 
 # 4
 @bot.command()
@@ -95,8 +101,8 @@ async def ping(ctx):
 # 8
 @bot.command()
 @commands.has_permissions(manage_nicknames=True)
-async def nick(ctx, member: discord.Member, *, nickname):
-    await member.edit(nick=nickname)
+async def nick(ctx, member: discord.Member, *, name):
+    await member.edit(nick=name)
     await ctx.send("Nickname updated")
 
 # 9
@@ -123,7 +129,7 @@ async def server(ctx):
 @bot.command()
 async def user(ctx, member: discord.Member=None):
     member = member or ctx.author
-    await ctx.send(f"User info: {member} ID: {member.id}")
+    await ctx.send(f"User: {member} ID: {member.id}")
 
 # 13
 @bot.command()
@@ -136,21 +142,21 @@ async def avatar(ctx, member: discord.Member=None):
 @commands.has_permissions(manage_channels=True)
 async def slowmode(ctx, seconds: int):
     await ctx.channel.edit(slowmode_delay=seconds)
-    await ctx.send(f"Slowmode set to {seconds} seconds")
+    await ctx.send(f"Slowmode {seconds}s")
 
 # 15
 @bot.command()
 @commands.has_permissions(manage_guild=True)
 async def setname(ctx, *, name):
     await ctx.guild.edit(name=name)
-    await ctx.send("Server name changed")
+    await ctx.send("Server name updated")
 
 # 16
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def topic(ctx, *, text):
     await ctx.channel.edit(topic=text)
-    await ctx.send("Channel topic updated")
+    await ctx.send("Topic updated")
 
 # 17
 @bot.command()
@@ -179,10 +185,10 @@ async def roleid(ctx, role: discord.Role):
 async def pin(ctx):
     ref = ctx.message.reference
     if not ref:
-        return await ctx.send("Reply to a message to pin it")
+        return await ctx.send("Reply to pin")
     msg = await ctx.channel.fetch_message(ref.message_id)
     await msg.pin()
-    await ctx.send("Message pinned")
+    await ctx.send("Pinned")
 
 # 22
 @bot.command()
@@ -190,15 +196,15 @@ async def pin(ctx):
 async def unpin(ctx):
     ref = ctx.message.reference
     if not ref:
-        return await ctx.send("Reply to a message to unpin it")
+        return await ctx.send("Reply to unpin")
     msg = await ctx.channel.fetch_message(ref.message_id)
     await msg.unpin()
-    await ctx.send("Message unpinned")
+    await ctx.send("Unpinned")
 
 # 23
 @bot.command()
 async def uptime(ctx):
-    await ctx.send("Bot is running")
+    await ctx.send("Bot running")
 
 # 24
 @bot.command()
@@ -235,42 +241,42 @@ async def pingrole(ctx, role: discord.Role):
 @commands.has_permissions(manage_channels=True)
 async def clone(ctx):
     ch = await ctx.channel.clone()
-    await ctx.send(f"Cloned channel {ch.name}")
+    await ctx.send(f"Cloned {ch.name}")
 
 # 30
 @bot.command()
 async def info(ctx):
-    await ctx.send("Moderation bot online")
+    await ctx.send("Moderation bot active")
 
-# ----------------------------------------
-# 9 OWNER SLASH COMMANDS (/)
-# ----------------------------------------
+# ==========================
+# OWNER SLASH COMMANDS (9)
+# ==========================
 @tree.command(name="shutdown", description="Shutdown bot")
-async def shutdown(interaction: discord.Interaction):
-    if not is_owner_interaction(interaction):
+async def shutdown(interaction):
+    if not is_owner_inter(interaction):
         return await interaction.response.send_message("Owner only")
     await interaction.response.send_message("Shutting down")
     await bot.close()
 
 @tree.command(name="restart", description="Restart bot")
-async def restart(interaction: discord.Interaction):
-    if not is_owner_interaction(interaction):
+async def restart(interaction):
+    if not is_owner_inter(interaction):
         return await interaction.response.send_message("Owner only")
     await interaction.response.send_message("Restarting")
     await bot.close()
 
-@tree.command(name="dm_host", description="Send a DM to host owner")
-async def dm_host(interaction: discord.Interaction, message: str):
-    if not is_owner_interaction(interaction):
+@tree.command(name="dm_host", description="DM host owner")
+async def dm_host(interaction, message: str):
+    if not is_owner_inter(interaction):
         return await interaction.response.send_message("Owner only")
     user = bot.get_user(OWNER_ID)
     if user:
         await user.send(message)
     await interaction.response.send_message("Sent")
 
-@tree.command(name="evalpy", description="Eval python code")
-async def evalpy(interaction: discord.Interaction, code: str):
-    if not is_owner_interaction(interaction):
+@tree.command(name="evalpy", description="Eval python")
+async def evalpy(interaction, code: str):
+    if not is_owner_inter(interaction):
         return await interaction.response.send_message("Owner only")
     try:
         result = eval(code)
@@ -279,29 +285,6 @@ async def evalpy(interaction: discord.Interaction, code: str):
         await interaction.response.send_message(str(e))
 
 @tree.command(name="evalraw", description="Exec python code")
-async def evalraw(interaction: discord.Interaction, code: str):
-    if not is_owner_interaction(interaction):
-        return await interaction.response.send_message("Owner only")
-    try:
-        exec(code)
-        await interaction.response.send_message("Executed")
-    except Exception as e:
-        await interaction.response.send_message(str(e))
-
-@tree.command(name="sync", description="Sync slash commands")
-async def sync(interaction: discord.Interaction):
-    if not is_owner_interaction(interaction):
-        return await interaction.response.send_message("Owner only")
-    await tree.sync()
-    await interaction.response.send_message("Commands synced")
-
-@tree.command(name="loadext", description="Load extension placeholder")
-async def loadext(interaction: discord.Interaction, name: str):
-    if not is_owner_interaction(interaction):
-        return await interaction.response.send_message("Owner only")
-    await interaction.response.send_message(f"Extension {name} loaded (placeholder)")
-
-@tree.command(name="unloadext", description="Unload extension placeholder")
-async def unloadext(interaction: discord.Interaction, name: str):
-    if not is_owner_interaction(interaction):
+async def evalraw(interaction, code: str):
+    if not is_owner_inter(interaction):
         return await interaction.response.send_message(
