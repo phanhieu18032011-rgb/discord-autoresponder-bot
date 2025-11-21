@@ -1,13 +1,11 @@
 import os
 import discord
 from discord.ext import commands
-from discord import app_commands
 import asyncio
-import aiohttp
 from aiohttp import web
 
 # =========================
-# ENV
+# ENV VARIABLES
 # =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
@@ -18,343 +16,342 @@ PREFIX = "!"
 # =========================
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
-tree = bot.tree
 
 # =========================
-# KEEP ALIVE SERVER
+# HELPER
 # =========================
-async def handle_root(request):
-    return web.Response(text="Bot alive")
-
-async def start_keep_alive():
-    app = web.Application()
-    app.router.add_get('/', handle_root)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("KEEP_ALIVE_PORT", "8080")))
-    await site.start()
+def is_owner():
+    async def predicate(ctx):
+        return ctx.author.id == OWNER_ID
+    return commands.check(predicate)
 
 # =========================
-# HELPERS
+# MOD COMMANDS (30 commands)
 # =========================
-def is_owner_ctx(ctx):
-    return ctx.author.id == OWNER_ID
 
-def is_owner_inter(interaction):
-    return interaction.user.id == OWNER_ID
-
-# ==============================
-# 30 PREFIX MOD COMMANDS (!)
-# ==============================
-# 1
+# 1. kick
 @bot.command()
 @commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason"):
+async def kick(ctx, member: discord.Member, *, reason=None):
     await member.kick(reason=reason)
-    await ctx.send(f"Kicked {member} Reason: {reason}")
+    await ctx.send(f"{member} has been kicked.")
 
-# 2
+# 2. ban
 @bot.command()
 @commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="No reason"):
+async def ban(ctx, member: discord.Member, *, reason=None):
     await member.ban(reason=reason)
-    await ctx.send(f"Banned {member} Reason: {reason}")
+    await ctx.send(f"{member} has been banned.")
 
-# 3
+# 3. unban
 @bot.command()
 @commands.has_permissions(ban_members=True)
-async def unban(ctx, *, user: str):
-    banned = await ctx.guild.bans()
-    name, discrim = user.split("#")
-    for entry in banned:
-        if entry.user.name == name and entry.user.discriminator == discrim:
-            await ctx.guild.unban(entry.user)
-            return await ctx.send(f"Unbanned {entry.user}")
-    await ctx.send("User not found")
+async def unban(ctx, user: discord.User):
+    banned_users = await ctx.guild.bans()
+    for ban_entry in banned_users:
+        if ban_entry.user.id == user.id:
+            await ctx.guild.unban(user)
+            await ctx.send(f"{user} has been unbanned.")
+            return
+    await ctx.send(f"{user} was not found in the ban list.")
 
-# 4
+# 4. mute
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def mute(ctx, member: discord.Member):
+    role = discord.utils.get(ctx.guild.roles, name="Muted")
+    if not role:
+        role = await ctx.guild.create_role(name="Muted")
+        for channel in ctx.guild.channels:
+            await channel.set_permissions(role, send_messages=False)
+    await member.add_roles(role)
+    await ctx.send(f"{member} has been muted.")
+
+# 5. unmute
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def unmute(ctx, member: discord.Member):
+    role = discord.utils.get(ctx.guild.roles, name="Muted")
+    await member.remove_roles(role)
+    await ctx.send(f"{member} has been unmuted.")
+
+# 6. clear messages
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
-    await ctx.channel.purge(limit=amount+1)
-    await ctx.send(f"Cleared {amount} messages")
+    deleted = await ctx.channel.purge(limit=amount)
+    await ctx.send(f"Deleted {len(deleted)} messages.", delete_after=5)
 
-# 5
+# 7. lock channel
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def lock(ctx):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    await ctx.send("Channel locked")
+async def lock(ctx, channel: discord.TextChannel = None):
+    channel = channel or ctx.channel
+    await channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send(f"{channel} has been locked.")
 
-# 6
+# 8. unlock channel
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def unlock(ctx):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send("Channel unlocked")
+async def unlock(ctx, channel: discord.TextChannel = None):
+    channel = channel or ctx.channel
+    await channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send(f"{channel} has been unlocked.")
 
-# 7
-@bot.command()
-async def ping(ctx):
-    await ctx.send(f"Ping {round(bot.latency*1000)} ms")
-
-# 8
-@bot.command()
-@commands.has_permissions(manage_nicknames=True)
-async def nick(ctx, member: discord.Member, *, name):
-    await member.edit(nick=name)
-    await ctx.send("Nickname updated")
-
-# 9
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def addrole(ctx, member: discord.Member, role: discord.Role):
-    await member.add_roles(role)
-    await ctx.send("Role added")
-
-# 10
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def removerole(ctx, member: discord.Member, role: discord.Role):
-    await member.remove_roles(role)
-    await ctx.send("Role removed")
-
-# 11
-@bot.command()
-async def server(ctx):
-    g = ctx.guild
-    await ctx.send(f"Server name: {g.name} Members: {g.member_count}")
-
-# 12
-@bot.command()
-async def user(ctx, member: discord.Member=None):
-    member = member or ctx.author
-    await ctx.send(f"User: {member} ID: {member.id}")
-
-# 13
-@bot.command()
-async def avatar(ctx, member: discord.Member=None):
-    member = member or ctx.author
-    await ctx.send(member.display_avatar.url)
-
-# 14
+# 9. slowmode
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def slowmode(ctx, seconds: int):
     await ctx.channel.edit(slowmode_delay=seconds)
-    await ctx.send(f"Slowmode {seconds}s")
+    await ctx.send(f"Slowmode set to {seconds} seconds.")
 
-# 15
+# 10. rename channel
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def rename(ctx, channel: discord.TextChannel, *, name):
+    await channel.edit(name=name)
+    await ctx.send(f"Channel renamed to {name}.")
+
+# 11. add role
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def addrole(ctx, member: discord.Member, role: discord.Role):
+    await member.add_roles(role)
+    await ctx.send(f"{role} has been added to {member}.")
+
+# 12. removerole
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def removerole(ctx, member: discord.Member, role: discord.Role):
+    await member.remove_roles(role)
+    await ctx.send(f"{role} has been removed from {member}.")
+
+# 13. create role
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def createrole(ctx, *, name):
+    await ctx.guild.create_role(name=name)
+    await ctx.send(f"Role {name} has been created.")
+
+# 14. delete role
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def deleterole(ctx, role: discord.Role):
+    await role.delete()
+    await ctx.send(f"Role {role} has been deleted.")
+
+# 15. announce
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def announce(ctx, *, message):
+    await ctx.send(message)
+
+# 16. nick
+@bot.command()
+@commands.has_permissions(change_nickname=True)
+async def nick(ctx, member: discord.Member, *, nickname):
+    await member.edit(nick=nickname)
+    await ctx.send(f"{member}'s nickname changed to {nickname}.")
+
+# 17. purge user
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purgeuser(ctx, member: discord.Member, amount: int):
+    deleted = await ctx.channel.purge(limit=amount, check=lambda m: m.author == member)
+    await ctx.send(f"Deleted {len(deleted)} messages from {member}.", delete_after=5)
+
+# 18. lockdown
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def lockdown(ctx):
+    for channel in ctx.guild.channels:
+        await channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send("All channels have been locked.")
+
+# 19. unlockall
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def unlockall(ctx):
+    for channel in ctx.guild.channels:
+        await channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send("All channels have been unlocked.")
+
+# 20. roleinfo
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def roleinfo(ctx, role: discord.Role):
+    await ctx.send(f"Role {role} has ID {role.id}, color {role.color}, {len(role.members)} members.")
+
+# 21. serverinfo
 @bot.command()
 @commands.has_permissions(manage_guild=True)
-async def setname(ctx, *, name):
-    await ctx.guild.edit(name=name)
-    await ctx.send("Server name updated")
+async def serverinfo(ctx):
+    guild = ctx.guild
+    await ctx.send(f"Server: {guild.name}, Members: {guild.member_count}, Owner: {guild.owner}.")
 
-# 16
+# 22. userinfo
 @bot.command()
-@commands.has_permissions(manage_channels=True)
-async def topic(ctx, *, text):
-    await ctx.channel.edit(topic=text)
-    await ctx.send("Topic updated")
-
-# 17
-@bot.command()
-async def id(ctx, member: discord.Member=None):
+async def userinfo(ctx, member: discord.Member = None):
     member = member or ctx.author
-    await ctx.send(str(member.id))
+    await ctx.send(f"{member} joined at {member.joined_at}, account created at {member.created_at}.")
 
-# 18
+# 23. avatar
 @bot.command()
-async def channelid(ctx):
-    await ctx.send(str(ctx.channel.id))
+async def avatar(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    await ctx.send(member.avatar.url)
 
-# 19
+# 24. servericon
 @bot.command()
-async def serverid(ctx):
-    await ctx.send(str(ctx.guild.id))
+async def servericon(ctx):
+    await ctx.send(ctx.guild.icon.url)
 
-# 20
-@bot.command()
-async def roleid(ctx, role: discord.Role):
-    await ctx.send(str(role.id))
-
-# 21
+# 25. saymod
 @bot.command()
 @commands.has_permissions(manage_messages=True)
-async def pin(ctx):
-    ref = ctx.message.reference
-    if not ref:
-        return await ctx.send("Reply to pin")
-    msg = await ctx.channel.fetch_message(ref.message_id)
-    await msg.pin()
-    await ctx.send("Pinned")
+async def saymod(ctx, *, message):
+    await ctx.send(message)
 
-# 22
+# 26. lockrole
 @bot.command()
-@commands.has_permissions(manage_messages=True)
-async def unpin(ctx):
-    ref = ctx.message.reference
-    if not ref:
-        return await ctx.send("Reply to unpin")
-    msg = await ctx.channel.fetch_message(ref.message_id)
-    await msg.unpin()
-    await ctx.send("Unpinned")
+@commands.has_permissions(manage_roles=True)
+async def lockrole(ctx, role: discord.Role):
+    for channel in ctx.guild.channels:
+        await channel.set_permissions(role, send_messages=False)
+    await ctx.send(f"{role} has been locked in all channels.")
 
-# 23
+# 27. unlockrole
 @bot.command()
-async def uptime(ctx):
-    await ctx.send("Bot running")
+@commands.has_permissions(manage_roles=True)
+async def unlockrole(ctx, role: discord.Role):
+    for channel in ctx.guild.channels:
+        await channel.set_permissions(role, send_messages=True)
+    await ctx.send(f"{role} has been unlocked in all channels.")
 
-# 24
+# 28. mentionrole
 @bot.command()
-async def members(ctx):
-    await ctx.send(f"Members: {ctx.guild.member_count}")
+@commands.has_permissions(mention_everyone=True)
+async def mentionrole(ctx, role: discord.Role, *, message):
+    await ctx.send(f"{role.mention} {message}")
 
-# 25
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def softban(ctx, member: discord.Member, *, reason="No reason"):
-    await member.ban(reason=reason)
-    await member.unban()
-    await ctx.send(f"Softbanned {member}")
-
-# 26
-@bot.command()
-async def bots(ctx):
-    count = sum(1 for m in ctx.guild.members if m.bot)
-    await ctx.send(f"Bots: {count}")
-
-# 27
-@bot.command()
-async def humans(ctx):
-    count = sum(1 for m in ctx.guild.members if not m.bot)
-    await ctx.send(f"Humans: {count}")
-
-# 28
-@bot.command()
-async def pingrole(ctx, role: discord.Role):
-    await ctx.send(role.mention)
-
-# 29
+# 29. topic
 @bot.command()
 @commands.has_permissions(manage_channels=True)
-async def clone(ctx):
-    ch = await ctx.channel.clone()
-    await ctx.send(f"Cloned {ch.name}")
+async def topic(ctx, channel: discord.TextChannel, *, text):
+    await channel.edit(topic=text)
+    await ctx.send(f"Topic for {channel} changed to: {text}")
 
-# 30
+# 30. slowrole
 @bot.command()
-async def info(ctx):
-    await ctx.send("Moderation bot active")
+@commands.has_permissions(manage_roles=True)
+async def slowrole(ctx, role: discord.Role, seconds: int):
+    for channel in ctx.guild.channels:
+        await channel.set_permissions(role, send_messages=True, reason=f"Slowmode {seconds} seconds")
+    await ctx.send(f"{role} slowmode applied (approx).")
 
-# ==========================
-# OWNER SLASH COMMANDS (9)
-# ==========================
-@tree.command(name="shutdown", description="Shutdown bot")
-async def shutdown(interaction):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    await interaction.response.send_message("Shutting down")
+# =========================
+# OWNER COMMANDS (10 commands)
+# =========================
+
+# 1. dm host
+@bot.command()
+@is_owner()
+async def dm(ctx, user: discord.User, *, message):
+    await user.send(message)
+    await ctx.send(f"Sent DM to {user}.")
+
+# 2. say
+@bot.command()
+@is_owner()
+async def say(ctx, *, message):
+    await ctx.send(message)
+
+# 3. shutdown
+@bot.command()
+@is_owner()
+async def shutdown(ctx):
+    await ctx.send("Shutting down...")
     await bot.close()
 
-@tree.command(name="restart", description="Restart bot")
-async def restart(interaction):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    await interaction.response.send_message("Restarting")
+# 4. restart
+@bot.command()
+@is_owner()
+async def restart(ctx):
+    await ctx.send("Restarting...")
     await bot.close()
+    os.execv(__file__, [])
 
-@tree.command(name="dm_host", description="DM host owner")
-async def dm_host(interaction, message: str):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    user = bot.get_user(OWNER_ID)
-    if user:
-        await user.send(message)
-    await interaction.response.send_message("Sent")
-
-@tree.command(name="evalpy", description="Eval python")
-async def evalpy(interaction, code: str):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
+# 5. eval
+@bot.command()
+@is_owner()
+async def eval(ctx, *, code):
     try:
         result = eval(code)
-        await interaction.response.send_message(str(result))
+        await ctx.send(f"Result: {result}")
     except Exception as e:
-        await interaction.response.send_message(str(e))
+        await ctx.send(f"Error: {e}")
 
-@tree.command(name="evalraw", description="Exec python code")
-async def evalraw(interaction, code: str):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
+# 6. exec
+@bot.command()
+@is_owner()
+async def exec(ctx, *, code):
     try:
-        exec_locals = {}
-        exec(code, {}, exec_locals)
-        output = exec_locals.get("result", "Executed")
-        await interaction.response.send_message(str(output))
+        exec(code)
+        await ctx.send("Executed successfully.")
     except Exception as e:
-        await interaction.response.send_message(str(e))
+        await ctx.send(f"Error: {e}")
 
-@tree.command(name="sync", description="Sync slash commands")
-async def sync(interaction):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    await tree.sync()
-    await interaction.response.send_message("Synced")
+# 7. load cogs (placeholder)
+@bot.command()
+@is_owner()
+async def load(ctx, *, module):
+    await ctx.send(f"Loaded {module} (placeholder).")
 
-@tree.command(name="broadcast", description="Broadcast to all guilds")
-async def broadcast(interaction, message: str):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    for g in bot.guilds:
-        c = g.system_channel
-        if c:
-            try:
-                await c.send(message)
-            except:
-                pass
-    await interaction.response.send_message("Broadcast sent")
+# 8. unload cogs (placeholder)
+@bot.command()
+@is_owner()
+async def unload(ctx, *, module):
+    await ctx.send(f"Unloaded {module} (placeholder).")
 
-@tree.command(name="ownerping", description="Check owner status")
-async def ownerping(interaction):
-    if not is_owner_inter(interaction):
-        return await interaction.response.send_message("Owner only")
-    await interaction.response.send_message("Owner confirmed")
+# 9. broadcast
+@bot.command()
+@is_owner()
+async def broadcast(ctx, *, message):
+    for member in ctx.guild.members:
+        try:
+            await member.send(message)
+        except:
+            pass
+    await ctx.send("Broadcast completed.")
 
-# ==========================
-# HELP COMMAND (SLASH)
-# ==========================
-@tree.command(name="help", description="Show command list")
-async def help_cmd(interaction):
-    embed = discord.Embed(
-        title="Bot Commands",
-        description="Prefix commands: !\nOwner commands: /",
-        color=0x3498db
-    )
-    embed.add_field(
-        name="30 Prefix Commands",
-        value="kick, ban, unban, clear, lock, unlock, ping, nick, addrole, removerole, server, user, avatar, slowmode, setname, topic, id, channelid, serverid, roleid, pin, unpin, uptime, members, softban, bots, humans, pingrole, clone, info",
-        inline=False
-    )
-    embed.add_field(
-        name="9 Owner Slash Commands",
-        value="shutdown, restart, dm_host, evalpy, evalraw, sync, broadcast, ownerping, help",
-        inline=False
-    )
-    await interaction.response.send_message(embed=embed)
+# 10. info
+@bot.command()
+@is_owner()
+async def info(ctx):
+    await ctx.send("Owner command list: DM, Say, Shutdown, Restart, Eval, Exec, Load, Unload, Broadcast, Info")
 
-# ==========================
-# BOT START
-# ==========================
+# =========================
+# KEEP ALIVE
+# =========================
+async def keep_alive():
+    app = web.Application()
+    async def handle(request):
+        return web.Response(text="Bot is alive!")
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
+    await site.start()
+
+# =========================
+# EVENTS
+# =========================
 @bot.event
 async def on_ready():
-    print("Bot ready")
-    await start_keep_alive()
-    try:
-        await tree.sync()
-        print("Slash synced")
-    except Exception as e:
-        print(e)
+    print(f"Logged in as {bot.user}")
+    await keep_alive()
 
+# =========================
+# RUN BOT
+# =========================
 bot.run(TOKEN)
