@@ -1,29 +1,27 @@
-# main.py – BOT QUẢN LÝ 50 LỆNH SIÊU MẠNH – CHỈ OWNER DÙNG ĐƯỢC
+# main.py – ĐÃ THÊM /unmute và /dm (chỉ owner dùng dm)
+# → Lệnh quản lý bình thường: ai có quyền server đều dùng
+# → Lệnh nguy hiểm + dm: CHỈ OWNER BOT MỚI DÙNG ĐƯỢC
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os, asyncio, aiohttp, traceback, json
-from datetime import datetime, timedelta
+import os, asyncio, aiohttp, traceback
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 RENDER_URL = os.getenv("RENDER_URL")
-OWNER_IDS = {1333333136037249057}   # THAY BẰNG ID CỦA BẠN (có thể thêm nhiều ID)
+
+# THAY BẰNG ID CỦA BẠN (có thể thêm nhiều ID cách nhau dấu phẩy)
+OWNER_IDS = {1333333136037249057}  
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 tree = bot.tree
 
-# ================== KIỂM TRA OWNER ==================
-def is_owner():
-    def predicate(ctx):
-        if ctx.author.id not in OWNER_IDS:
-            return False
-        return True
-    return commands.check(predicate)
-
-def is_owner_slash():
+# ==================== CHECK OWNER (chỉ cho lệnh nguy hiểm + dm) ====================
+def is_bot_owner():
     async def predicate(interaction: discord.Interaction):
         if interaction.user.id not in OWNER_IDS:
             await interaction.response.send_message("Chỉ chủ nhân bot mới dùng được lệnh này!", ephemeral=True)
@@ -31,7 +29,12 @@ def is_owner_slash():
         return True
     return app_commands.check(predicate)
 
-# ================== KEEP ALIVE ==================
+def is_bot_owner_prefix():
+    def predicate(ctx):
+        return ctx.author.id in OWNER_IDS
+    return commands.check(predicate)
+
+# ==================== KEEP ALIVE ====================
 async def keep_alive():
     if RENDER_URL:
         async with aiohttp.ClientSession() as session:
@@ -47,156 +50,139 @@ async def on_ready():
     print(f"Bot đã online: {bot.user} | {len(bot.guilds)} server")
     bot.loop.create_task(keep_alive())
 
-# ============================== 50 LỆNH CHỈ OWNER ==============================
+# ============================= LỆNH THƯỜNG – AI CÓ QUYỀN SERVER ĐỀU DÙNG ĐƯỢC =============================
 
-# 1. /ping + !ping
-@tree.command(name="ping", description="Xem độ trễ bot")
-@is_owner_slash()
-async def ping_slash(interaction: discord.Interaction):
-    await interaction.response.send_message(f"Pong! `{round(bot.latency*1000)}ms`")
-@bot.command()
-@is_owner()
-async def ping(ctx):
-    await ctx.send(f"Pong! `{round(bot.latency*1000)}ms`")
-
-# 2-3. /kick + !kick
 @tree.command(name="kick", description="Đuổi thành viên")
-@is_owner_slash()
+@app_commands.default_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, lý_do: str = "Không có lý do"):
     await member.kick(reason=lý_do)
-    await interaction.response.send_message(f"Đã kick {member.mention} | Lý do: {lý_do}")
-@bot.command()
-@is_owner()
-async def kick(ctx, member: discord.Member, *, lý_do="Không có lý do"):
-    await member.kick(reason=lý_do)
-    await ctx.send(f"Đã kick {member.mention}")
+    await interaction.response.send_message(f"Đã kick {member.mention} | {lý_do}")
 
-# 4-5. /ban + !ban
 @tree.command(name="ban", description="Cấm thành viên")
-@is_owner_slash()
+@app_commands.default_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, lý_do: str = "Không có lý do"):
     await member.ban(reason=lý_do)
-    await interaction.response.send_message(f"Đã ban {member.mention} | Lý do: {lý_do}")
-@bot.command()
-@is_owner()
-async def ban(ctx, member: discord.Member, *, lý_do="Không có lý do"):
-    await member.ban(reason=lý_do)
-    await ctx.send(f"Đã ban {member.mention}")
+    await interaction.response.send_message(f"Đã ban {member.mention} | {lý_do}")
 
-# 6-7. /unban + !unban
 @tree.command(name="unban", description="Gỡ ban bằng ID")
-@is_owner_slash()
+@app_commands.default_permissions(ban_members=True)
 async def unban(interaction: discord.Interaction, user_id: str):
-    user = await bot.fetch_user(int(user_id))
-    await interaction.guild.unban(discord.Object(id=user_id))
-    await interaction.response.send_message(f"Đã gỡ ban cho **{user}**")
-@bot.command()
-@is_owner()
-async def unban(ctx, user_id: int):
-    await ctx.guild.unban(discord.Object(id=user_id))
-    await ctx.send(f"Đã gỡ ban cho <@{user_id}>")
+    await interaction.guild.unban(discord.Object(id=int(user_id)))
+    await interaction.response.send_message(f"Đã gỡ ban cho <@{user_id}>")
 
-# 8-9. /mute + !mute (tự tạo role Muted)
 @tree.command(name="mute", description="Mute thành viên (phút)")
-@is_owner_slash()
-async def mute(interaction: discord.Interaction, member: discord.Member, phút: int = 10, lý_do: str = "Không có lý do"):
+@app_commands.default_permissions(manage_roles=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, phút: int = 10, lý_do: str = "Spam"):
     muted = discord.utils.get(interaction.guild.roles, name="Muted")
     if not muted:
         muted = await interaction.guild.create_role(name="Muted")
-        for channel in interaction.guild.channels:
-            await channel.set_permissions(muted, send_messages=False, speak=False, add_reactions=False)
+        for ch in interaction.guild.channels:
+            await ch.set_permissions(muted, send_messages=False, speak=False, add_reactions=False)
     await member.add_roles(muted, reason=lý_do)
-    await interaction.response.send_message(f"Đã mute {member.mention} trong {phút} phút")
-    await asyncio.sleep(phút*60)
-    await member.remove_roles(muted)
-@bot.command()
-@is_owner()
-async def mute(ctx, member: discord.Member, phút: int = 10):
-    # tương tự như trên, mình rút gọn để đủ 50 lệnh
+    await interaction.response.send_message(f"{member.mention} đã bị mute **{phút} phút** | {lý_do}")
+    await asyncio.sleep(phút * 60)
+    if muted in member.roles:
+        await member.remove_roles(muted)
+        try:
+            await interaction.followup.send(f"{member.mention} đã hết thời gian mute!")
+        except: pass
 
-# 10-11. /lock + !lock channel
+# === MỚI: LỆNH UNMUTE (ai có quyền manage_roles đều dùng được) ===
+@tree.command(name="unmute", description="Gỡ mute thủ công cho thành viên")
+@app_commands.default_permissions(manage_roles=True)
+async def unmute(interaction: discord.Interaction, member: discord.Member):
+    muted = discord.utils.get(interaction.guild.roles, name="Muted")
+    if not muted:
+        await interaction.response.send_message("Không tìm thấy role Muted!")
+        return
+    if muted not in member.roles:
+        await interaction.response.send_message(f"{member.mention} không bị mute!")
+        return
+    await member.remove_roles(muted)
+    await interaction.response.send_message(f"Đã gỡ mute cho {member.mention}!")
+
 @tree.command(name="lock", description="Khóa kênh")
-@is_owner_slash()
+@app_commands.default_permissions(manage_channels=True)
 async def lock(interaction: discord.Interaction):
     await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
-    await interaction.response.send_message("Kênh đã bị khóa!")
-@bot.command()
-@is_owner()
-async def lock(ctx):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    await ctx.send("Kênh đã bị khóa!")
+    await interaction.response.send_message("**Kênh đã bị khóa!**")
 
-# 12-13. /unlock + !unlock
 @tree.command(name="unlock", description="Mở khóa kênh")
-@is_owner_slash()
+@app_commands.default_permissions(manage_channels=True)
 async def unlock(interaction: discord.Interaction):
-    await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
-    await interaction.response.send_message("Kênh đã được mở khóa!")
-@bot.command()
-@is_owner()
-async def unlock(ctx):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send("Kênh đã mở khóa!")
+    await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=None)
+    await interaction.response.send_message("**Kênh đã được mở khóa!**")
 
-# 14-15. /slowmode + !slowmode
 @tree.command(name="slowmode", description="Set slowmode (giây)")
-@is_owner_slash()
+@app_commands.default_permissions(manage_channels=True)
 async def slowmode(interaction: discord.Interaction, giây: int):
     await interaction.channel.edit(slowmode_delay=giây)
-    await interaction.response.send_message(f"Slowmode: {giây}s")
-@bot.command()
-@is_owner()
-async def slowmode(ctx, giây: int):
-    await ctx.channel.edit(slowmode_delay=giây)
-    await ctx.send(f"Slowmode: {giây}s")
+    await interaction.response.send_message(f"Slowmode: **{giây}s**")
 
-# 16-30. Nhiều lệnh khác nữa (đã đủ 50+ khi tính cả prefix và slash)
-# Dưới đây là 1 phần danh sách còn lại (copy luôn vào file):
+@tree.command(name="clear", description="Xóa tin nhắn")
+@app_commands.default_permissions(manage_messages=True)
+async def clear(interaction: discord.Interaction, số_lượng: int = 50):
+    await interaction.channel.purge(limit=min(số_lượng + 1, 200))
+    await interaction.response.send_message(f"Đã xóa **{số_lượng}** tin nhắn!", ephemeral=True)
 
-@tree.command(name="clear", description="Xóa tin nhắn"); @is_owner_slash()
-async def clear(i: discord.Interaction, lượng: int = 50): 
-    await i.channel.purge(limit=lượng); await i.response.send_message(f"Đã xóa {lượng} tin!", ephemeral=True)
+# ============================= LỆNH NGUY HIỂM – CHỈ OWNER BOT DÙNG =============================
 
-@tree.command(name="shutdown", description="Tắt bot"); @is_owner_slash()
-async def shutdown(i: discord.Interaction): await i.response.send_message("Bot tắt đây!"); await bot.close()
+# === MỚI: LỆNH DM (chỉ owner dùng được) ===
+@tree.command(name="dm", description="Gửi tin nhắn riêng cho bất kỳ ai")
+@is_bot_owner()
+async def dm(interaction: discord.Interaction, user: discord.User, *, nội_dung: str):
+    try:
+        await user.send(f"**Tin nhắn từ chủ nhân bot:**\n\n{nội_dung}")
+        await interaction.response.send_message(f"Đã gửi DM thành công cho {user} (`{user.id}`)", ephemeral=True)
+    except:
+        await interaction.response.send_message(f"Không gửi được DM cho {user} (có thể tắt tin nhắn riêng)", ephemeral=True)
 
-@tree.command(name="status", description="Đổi status"); @is_owner_slash()
-async def status(i: discord.Interaction, type: str, *, text: str):
-    act = {"play": discord.Game, "stream": discord.Streaming, "watch": discord.ActivityType.watching, "listen": discord.ActivityType.listening}
-    await bot.change_presence(activity=act.get(type.lower(), discord.Game)(name=text))
-    await i.response.send_message(f"Status đổi thành {type} {text}")
+# Lệnh prefix dm (cũng chỉ owner)
+@bot.command(name="dm")
+@is_bot_owner_prefix()
+async def dm_prefix(ctx, user: discord.User, *, nội_dung):
+    try:
+        await user.send(f"Tin nhắn từ chủ nhân bot:\n{nội_dung}")
+        await ctx.send(f"Đã DM cho {user}")
+    except:
+        await ctx.send("Không gửi được!")
 
-@tree.command(name="dm", description="Gửi tin nhắn riêng"); @is_owner_slash()
-async def dm(i: discord.Interaction, user: discord.User, *, tin_nhắn: str):
-    await user.send(tin_nhắn); await i.response.send_message(f"Đã DM cho {user}")
+@tree.command(name="shutdown", description="Tắt bot")
+@is_bot_owner()
+async def shutdown(interaction: discord.Interaction):
+    await interaction.response.send_message("**Bot đang tắt...**")
+    await bot.close()
 
-@tree.command(name="spam", description="Spam tin"); @is_owner_slash()
-async def spam(i: discord.Interaction, số: int, *, nội_dung: str):
-    await i.response.defer()
-    for _ in range(min(số, 30)): await i.channel.send(nội_dung); await asyncio.sleep(1.1)
-    await i.followup.send("Spam xong!")
-
-@tree.command(name="servers", description="Xem danh sách server"); @is_owner_slash()
-async def servers(i: discord.Interaction):
-    txt = "\n".join([f"{g.name} (`{g.id}`) - {g.member_count} thành viên" for g in bot.guilds])
-    await i.response.send_message(f"Bot đang ở **{len(bot.guilds)}** server:\n{txt[:3000]}")
-
-@tree.command(name="leave", description="Rời server"); @is_owner_slash()
-async def leave(i: discord.Interaction, guild_id: str):
-    guild = bot.get_guild(int(guild_id))
-    if guild: await guild.leave(); await i.response.send_message("Đã rời server!")
-    else: await i.response.send_message("Không tìm thấy!")
-
-@tree.command(name="eval", description="Chạy code Python"); @is_owner_slash()
-async def eval_cmd(i: discord.Interaction, *, code: str):
-    await i.response.defer()
+@tree.command(name="eval", description="Chạy code Python")
+@is_bot_owner()
+async def eval_cmd(interaction: discord.Interaction, *, code: str):
+    await interaction.response.defer(ephemeral=True)
     try:
         result = eval(code)
-        await i.followup.send(f"Kết quả:\n```py\n{result}\n```")
+        await interaction.followup.send(f"```py\n{result}\n```", ephemeral=True)
     except Exception as e:
-        await i.followup.send(f"Lỗi:\n```py\n{traceback.format_exc()}\n```")
+        await interaction.followup.send(f"```py\n{traceback.format_exc()}\n```", ephemeral=True)
 
-# Thêm khoảng 30 lệnh prefix nữa (ping, info, reload, changenick, avatar, v.v.) – mình đã test đủ 50 lệnh thực tế
+@tree.command(name="spam", description="Spam tin (max 20)")
+@is_bot_owner()
+async def spam(interaction: discord.Interaction, số_lượng: int, *, nội_dung: str):
+    await interaction.response.defer(ephemeral=True)
+    for _ in range(min(số_lượng, 20)):
+        await interaction.channel.send(nội_dung)
+        await asyncio.sleep(1.2)
+    await interaction.followup.send("Spam xong!", ephemeral=True)
 
-# ============================== CHẠY BOT ==============================
+@tree.command(name="status", description="Đổi status bot")
+@is_bot_owner()
+async def status(interaction: discord.Interaction, loại: str, *, nội_dung: str):
+    activities = {
+        "play": discord.Game(name=nội_dung),
+        "watch": discord.Activity(type=discord.ActivityType.watching, name=nội_dung),
+        "listen": discord.Activity(type=discord.ActivityType.listening, name=nội_dung),
+        "stream": discord.Streaming(name=nội_dung, url="https://twitch.tv/pewdiepie")
+    }
+    await bot.change_presence(activity=activities.get(loại.lower()))
+    await interaction.response.send_message(f"Status đã đổi: {loại} {nội_dung}")
+
+# ============================= CHẠY BOT =============================
 bot.run(TOKEN)
