@@ -287,4 +287,74 @@ async def evalpy(interaction, code: str):
 @tree.command(name="evalraw", description="Exec python code")
 async def evalraw(interaction, code: str):
     if not is_owner_inter(interaction):
-        return await interaction.response.send_message(
+        return await interaction.response.send_message("Owner only")
+    try:
+        exec_locals = {}
+        exec(code, {}, exec_locals)
+        output = exec_locals.get("result", "Executed")
+        await interaction.response.send_message(str(output))
+    except Exception as e:
+        await interaction.response.send_message(str(e))
+
+@tree.command(name="sync", description="Sync slash commands")
+async def sync(interaction):
+    if not is_owner_inter(interaction):
+        return await interaction.response.send_message("Owner only")
+    await tree.sync()
+    await interaction.response.send_message("Synced")
+
+@tree.command(name="broadcast", description="Broadcast to all guilds")
+async def broadcast(interaction, message: str):
+    if not is_owner_inter(interaction):
+        return await interaction.response.send_message("Owner only")
+    for g in bot.guilds:
+        c = g.system_channel
+        if c:
+            try:
+                await c.send(message)
+            except:
+                pass
+    await interaction.response.send_message("Broadcast sent")
+
+@tree.command(name="ownerping", description="Check owner status")
+async def ownerping(interaction):
+    if not is_owner_inter(interaction):
+        return await interaction.response.send_message("Owner only")
+    await interaction.response.send_message("Owner confirmed")
+
+# ==========================
+# HELP COMMAND (SLASH)
+# ==========================
+@tree.command(name="help", description="Show command list")
+async def help_cmd(interaction):
+    embed = discord.Embed(
+        title="Bot Commands",
+        description="Prefix commands: !\nOwner commands: /",
+        color=0x3498db
+    )
+    embed.add_field(
+        name="30 Prefix Commands",
+        value="kick, ban, unban, clear, lock, unlock, ping, nick, addrole, removerole, server, user, avatar, slowmode, setname, topic, id, channelid, serverid, roleid, pin, unpin, uptime, members, softban, bots, humans, pingrole, clone, info",
+        inline=False
+    )
+    embed.add_field(
+        name="9 Owner Slash Commands",
+        value="shutdown, restart, dm_host, evalpy, evalraw, sync, broadcast, ownerping, help",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ==========================
+# BOT START
+# ==========================
+@bot.event
+async def on_ready():
+    print("Bot ready")
+    await start_keep_alive()
+    try:
+        await tree.sync()
+        print("Slash synced")
+    except Exception as e:
+        print(e)
+
+bot.run(TOKEN)
