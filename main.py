@@ -6,6 +6,7 @@ import requests
 from flask import Flask
 import threading
 import logging
+from discord import app_commands
 
 # Cau hinh logging
 logging.basicConfig(level=logging.INFO)
@@ -29,11 +30,9 @@ def home():
 def keep_alive():
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
 
-# Owner check
-def is_owner():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        return interaction.user.id == int(os.getenv('OWNER_ID', 0))
-    return discord.app_commands.check(predicate)
+# Owner check cho slash commands
+def is_owner(interaction: discord.Interaction) -> bool:
+    return interaction.user.id == int(os.getenv('OWNER_ID', 0))
 
 # Error handler
 @bot.event
@@ -47,12 +46,19 @@ async def on_command_error(ctx, error):
 async def on_ready():
     logging.info(f'Bot ready: {bot.user}')
     logging.info(f'Servers: {len(bot.guilds)}')
-    # Clear slash commands to prevent errors
-    try:
+    
+    # FIX: Sync vào 1 guild cụ thể để lệnh xuất hiện ngay lập tức
+    guild_id = os.getenv('GUILD_ID')  # Thêm biến này vào Render
+    if guild_id:
+        guild = discord.Object(id=int(guild_id))
+        bot.tree.clear_commands(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        logging.info(f'Synced {len(synced)} slash commands to guild {guild_id}')
+    else:
+        # Nếu không có GUILD_ID, sync global (chậm)
         bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
-    except:
-        pass
+        synced = await bot.tree.sync()
+        logging.info(f'Synced {len(synced)} slash commands globally')
 
 # === 30 LENH MOD QUAN LI (PREFIX) ===
 
@@ -276,9 +282,9 @@ async def botinfo(ctx):
 
 # === 10 LENH SLASH CHO OWNER ===
 
-# Lệnh 31: dm
+# Lệnh 31: dm slash
 @bot.tree.command(name='dm', description='dm user')
-@is_owner()
+@app_commands.check(is_owner)
 async def dm_slash(interaction: discord.Interaction, member: discord.Member, message: str):
     try:
         await member.send(message)
@@ -286,23 +292,23 @@ async def dm_slash(interaction: discord.Interaction, member: discord.Member, mes
     except Exception as e:
         await interaction.response.send_message(f'dm failed {str(e)}', ephemeral=True)
 
-# Lệnh 32: say
+# Lệnh 32: say slash
 @bot.tree.command(name='say', description='say message')
-@is_owner()
+@app_commands.check(is_owner)
 async def say_slash(interaction: discord.Interaction, message: str):
     await interaction.response.send_message('done', ephemeral=True)
     await interaction.channel.send(message)
 
-# Lệnh 33: servers
+# Lệnh 33: servers slash
 @bot.tree.command(name='servers', description='list servers')
-@is_owner()
+@app_commands.check(is_owner)
 async def servers_slash(interaction: discord.Interaction):
     server_list = '\n'.join([f'{g.name}: {g.id}' for g in bot.guilds[:10]])
     await interaction.response.send_message(f'servers {len(bot.guilds)}\n{server_list}', ephemeral=True)
 
-# Lệnh 34: leave
+# Lệnh 34: leave slash
 @bot.tree.command(name='leave', description='leave server')
-@is_owner()
+@app_commands.check(is_owner)
 async def leave_slash(interaction: discord.Interaction, guild_id: str):
     guild = bot.get_guild(int(guild_id))
     if guild:
@@ -311,9 +317,9 @@ async def leave_slash(interaction: discord.Interaction, guild_id: str):
     else:
         await interaction.response.send_message('guild not found', ephemeral=True)
 
-# Lệnh 35: broadcast
+# Lệnh 35: broadcast slash
 @bot.tree.command(name='broadcast', description='broadcast message')
-@is_owner()
+@app_commands.check(is_owner)
 async def broadcast_slash(interaction: discord.Interaction, message: str):
     await interaction.response.send_message('broadcasting', ephemeral=True)
     success = 0
@@ -327,9 +333,9 @@ async def broadcast_slash(interaction: discord.Interaction, message: str):
                 continue
     await interaction.followup.send(f'broadcast {success} servers', ephemeral=True)
 
-# Lệnh 36: setavatar
+# Lệnh 36: setavatar slash
 @bot.tree.command(name='setavatar', description='set bot avatar')
-@is_owner()
+@app_commands.check(is_owner)
 async def setavatar_slash(interaction: discord.Interaction, url: str):
     try:
         response = requests.get(url, timeout=10)
@@ -338,9 +344,9 @@ async def setavatar_slash(interaction: discord.Interaction, url: str):
     except Exception as e:
         await interaction.response.send_message(f'setavatar failed {str(e)}', ephemeral=True)
 
-# Lệnh 37: setname
+# Lệnh 37: setname slash
 @bot.tree.command(name='setname', description='set bot username')
-@is_owner()
+@app_commands.check(is_owner)
 async def setname_slash(interaction: discord.Interaction, name: str):
     try:
         await bot.user.edit(username=name)
@@ -348,9 +354,9 @@ async def setname_slash(interaction: discord.Interaction, name: str):
     except Exception as e:
         await interaction.response.send_message(f'setname failed {str(e)}', ephemeral=True)
 
-# Lệnh 38: maintenance
+# Lệnh 38: maintenance slash
 @bot.tree.command(name='maintenance', description='toggle maintenance')
-@is_owner()
+@app_commands.check(is_owner)
 async def maintenance_slash(interaction: discord.Interaction, mode: str):
     global maintenance_mode
     if mode.lower() == 'on':
@@ -362,9 +368,9 @@ async def maintenance_slash(interaction: discord.Interaction, mode: str):
     else:
         await interaction.response.send_message('usage on/off', ephemeral=True)
 
-# Lệnh 39: eval
+# Lệnh 39: eval slash
 @bot.tree.command(name='eval', description='evaluate code')
-@is_owner()
+@app_commands.check(is_owner)
 async def eval_slash(interaction: discord.Interaction, code: str):
     try:
         result = eval(code)
@@ -372,9 +378,9 @@ async def eval_slash(interaction: discord.Interaction, code: str):
     except Exception as e:
         await interaction.response.send_message(f'eval error {e}', ephemeral=True)
 
-# Lệnh 40: shutdown
+# Lệnh 40: shutdown slash
 @bot.tree.command(name='shutdown', description='shutdown bot')
-@is_owner()
+@app_commands.check(is_owner)
 async def shutdown_slash(interaction: discord.Interaction):
     await interaction.response.send_message('shutdown', ephemeral=True)
     await bot.close()
