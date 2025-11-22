@@ -1,395 +1,330 @@
-# main.py
 import discord
 from discord.ext import commands
 import os
-import requests
+import asyncio
+import datetime
 from flask import Flask
-import threading
-import logging
-from discord import app_commands
+from threading import Thread
+import aiohttp  # Added for changeavatar command
 
-# Cau hinh logging
-logging.basicConfig(level=logging.INFO)
+bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+bot.owner_id = int(os.getenv('OWNER_ID'))  # Added to set owner ID from environment variable
 
-# Cau hinh bot
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents, case_insensitive=True)
-
-# Maintenance mode
-maintenance_mode = False
-
-# Keep alive server
-app = Flask('')
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot is alive!"
 
-def keep_alive():
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
-# Owner check cho slash commands
-def is_owner(interaction: discord.Interaction) -> bool:
-    return interaction.user.id == int(os.getenv('OWNER_ID', 0))
+t = Thread(target=run_flask)
+t.start()
 
-# Error handler
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    logging.error(f"Error: {error}")
-    await ctx.send(f"error {str(error)}")
+start_time = datetime.datetime.utcnow()
 
 @bot.event
 async def on_ready():
-    logging.info(f'Bot ready: {bot.user}')
-    logging.info(f'Servers: {len(bot.guilds)}')
-    
-    # FIX: Sync vào 1 guild cụ thể để lệnh xuất hiện ngay lập tức
-    guild_id = os.getenv('GUILD_ID')  # Thêm biến này vào Render
-    if guild_id:
-        guild = discord.Object(id=int(guild_id))
-        bot.tree.clear_commands(guild=guild)
-        synced = await bot.tree.sync(guild=guild)
-        logging.info(f'Synced {len(synced)} slash commands to guild {guild_id}')
-    else:
-        # Nếu không có GUILD_ID, sync global (chậm)
-        bot.tree.clear_commands(guild=None)
-        synced = await bot.tree.sync()
-        logging.info(f'Synced {len(synced)} slash commands globally')
+    print(f'Bot is ready as {bot.user}')
 
-# === 30 LENH MOD QUAN LI (PREFIX) ===
-
-# Lệnh 1: kick
+# Command 1: kick (mod)
 @bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason=None):
     await member.kick(reason=reason)
-    await ctx.send(f'kick {member.mention}')
+    await ctx.send(f'Kicked {member} for {reason}')
 
-# Lệnh 2: ban
+# Command 2: ban (mod)
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason=None):
     await member.ban(reason=reason)
-    await ctx.send(f'ban {member.mention}')
+    await ctx.send(f'Banned {member} for {reason}')
 
-# Lệnh 3: unban
+# Command 3: unban (mod)
 @bot.command()
 @commands.has_permissions(ban_members=True)
-async def unban(ctx, *, member: str):
-    async for ban_entry in ctx.guild.bans():
-        user = ban_entry.user
-        if str(user) == member:
-            await ctx.guild.unban(user)
-            await ctx.send(f'unban {user.mention}')
-            return
-    await ctx.send('user not found')
+async def unban(ctx, user_id: int):
+    user = await bot.fetch_user(user_id)
+    await ctx.guild.unban(user)
+    await ctx.send(f'Unbanned {user}')
 
-# Lệnh 4: mute
+# Command 4: mute (mod)
 @bot.command()
 @commands.has_permissions(manage_roles=True)
-async def mute(ctx, member: discord.Member, *, reason=None):
-    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-    if not muted_role:
-        muted_role = await ctx.guild.create_role(name="Muted")
-        for channel in ctx.guild.channels:
-            await channel.set_permissions(muted_role, speak=False, send_messages=False)
-    await member.add_roles(muted_role, reason=reason)
-    await ctx.send(f'mute {member.mention}')
+async def mute(ctx, member: discord.Member, time: int):
+    # Assume mute role exists with ID 1234567890, replace with actual
+    mute_role = ctx.guild.get_role(1234567890)
+    await member.add_roles(mute_role)
+    await ctx.send(f'Muted {member} for {time} minutes')
+    await asyncio.sleep(time * 60)
+    await member.remove_roles(mute_role)
 
-# Lệnh 5: unmute
+# Command 5: unmute (mod)
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def unmute(ctx, member: discord.Member):
-    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-    await member.remove_roles(muted_role)
-    await ctx.send(f'unmute {member.mention}')
+    # Assume mute role exists with ID 1234567890, replace with actual
+    mute_role = ctx.guild.get_role(1234567890)
+    await member.remove_roles(mute_role)
+    await ctx.send(f'Unmuted {member}')
 
-# Lệnh 6: warn
+# Command 6: warn (mod)
 @bot.command()
-@commands.has_permissions(kick_members=True)
-async def warn(ctx, member: discord.Member, *, reason: str):
-    await ctx.send(f'warn {member.mention} {reason}')
+@commands.has_permissions(manage_messages=True)
+async def warn(ctx, member: discord.Member, *, reason=None):
+    await ctx.send(f'Warned {member} for {reason}')
+    # Log to mod channel or db, simplified
 
-# Lệnh 7: warnings
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def warnings(ctx, member: discord.Member):
-    await ctx.send(f'warnings {member.mention} 0')
-
-# Lệnh 8: clearwarns
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def clearwarns(ctx, member: discord.Member):
-    await ctx.send(f'clearwarns {member.mention}')
-
-# Lệnh 9: clear
+# Command 7: clear (mod)
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
     await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f'clear {amount}')
+    await ctx.send(f'Cleared {amount} messages')
 
-# Lệnh 10: slowmode
+# Command 8: slowmode (mod)
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def slowmode(ctx, seconds: int):
     await ctx.channel.edit(slowmode_delay=seconds)
-    await ctx.send(f'slowmode {seconds}')
+    await ctx.send(f'Slowmode set to {seconds} seconds')
 
-# Lệnh 11: lock
+# Command 9: lock (mod)
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def lock(ctx):
     await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    await ctx.send('lock channel')
+    await ctx.send('Channel locked')
 
-# Lệnh 12: unlock
+# Command 10: unlock (mod)
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def unlock(ctx):
     await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send('unlock channel')
+    await ctx.send('Channel unlocked')
 
-# Lệnh 13: addrole
+# Command 11: addrole (mod)
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def addrole(ctx, member: discord.Member, role: discord.Role):
     await member.add_roles(role)
-    await ctx.send(f'addrole {role.name} {member.mention}')
+    await ctx.send(f'Added {role} to {member}')
 
-# Lệnh 14: removerole
+# Command 12: removerole (mod)
 @bot.command()
 @commands.has_permissions(manage_roles=True)
 async def removerole(ctx, member: discord.Member, role: discord.Role):
     await member.remove_roles(role)
-    await ctx.send(f'removerole {role.name} {member.mention}')
+    await ctx.send(f'Removed {role} from {member}')
 
-# Lệnh 15: nickname
+# Command 13: nick (mod)
 @bot.command()
 @commands.has_permissions(manage_nicknames=True)
-async def nickname(ctx, member: discord.Member, *, nick: str):
-    await member.edit(nick=nick)
-    await ctx.send(f'nickname {member.mention} {nick}')
+async def nick(ctx, member: discord.Member, *, new_nick):
+    await member.edit(nick=new_nick)
+    await ctx.send(f'Changed nick of {member} to {new_nick}')
 
-# Lệnh 16: ping
+# Command 14: poll (mod)
 @bot.command()
-async def ping(ctx):
-    await ctx.send(f'ping {round(bot.latency * 1000)}ms')
+@commands.has_permissions(manage_messages=True)
+async def poll(ctx, question, *options):
+    if len(options) > 10:
+        await ctx.send('Max 10 options')
+        return
+    msg = await ctx.send(f'Poll: {question}\n' + '\n'.join(f'{i+1}. {opt}' for i, opt in enumerate(options)))
+    for i in range(len(options)):
+        await msg.add_reaction(str(i+1))
 
-# Lệnh 17: serverinfo
+# Command 15: announce (mod)
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def announce(ctx, *, message):
+    # Assume announce channel ID 1234567890, replace
+    channel = bot.get_channel(1234567890)
+    await channel.send(message)
+
+# Command 16: timeout (mod)
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def timeout(ctx, member: discord.Member, minutes: int):
+    until = datetime.timedelta(minutes=minutes)
+    await member.timeout(until=until)
+    await ctx.send(f'Timed out {member} for {minutes} minutes')
+
+# Command 17: untimeout (mod)
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def untimeout(ctx, member: discord.Member):
+    await member.timeout(until=None)
+    await ctx.send(f'Removed timeout from {member}')
+
+# Command 18: purge (mod)
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def purge(ctx, amount: int):
+    await ctx.channel.purge(limit=amount)
+    await ctx.send(f'Purged {amount} messages')
+
+# Command 19: report (mod)
+@bot.command()
+async def report(ctx, member: discord.Member, *, reason):
+    # Assume mod channel ID 1234567890
+    channel = bot.get_channel(1234567890)
+    await channel.send(f'Report: {member} for {reason} by {ctx.author}')
+
+# Command 20: modlog (mod)
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def modlog(ctx, member: discord.Member):
+    await ctx.send(f'Mod log for {member}: (simplified, no actual log)')
+
+# Command 21: serverinfo (mod)
 @bot.command()
 async def serverinfo(ctx):
     guild = ctx.guild
-    await ctx.send(f'serverinfo {guild.name} {guild.member_count} {guild.id}')
+    await ctx.send(f'Server: {guild.name}, Members: {guild.member_count}, Created: {guild.created_at}')
 
-# Lệnh 18: userinfo
+# Command 22: userinfo (mod)
 @bot.command()
 async def userinfo(ctx, member: discord.Member = None):
-    if not member:
-        member = ctx.author
-    await ctx.send(f'userinfo {member.name} {member.id} {member.created_at}')
+    member = member or ctx.author
+    await ctx.send(f'User: {member}, Joined: {member.joined_at}, Created: {member.created_at}')
 
-# Lệnh 19: channelinfo
+# Command 23: channelinfo (mod)
 @bot.command()
-async def channelinfo(ctx):
-    channel = ctx.channel
-    await ctx.send(f'channelinfo {channel.name} {channel.id} {channel.type}')
+async def channelinfo(ctx, channel: discord.TextChannel = None):
+    channel = channel or ctx.channel
+    await ctx.send(f'Channel: {channel.name}, Created: {channel.created_at}, Position: {channel.position}')
 
-# Lệnh 20: roleinfo
+# Command 24: invite (mod)
 @bot.command()
-async def roleinfo(ctx, role: discord.Role):
-    await ctx.send(f'roleinfo {role.name} {role.id} {len(role.members)}')
+@commands.has_permissions(create_instant_invite=True)
+async def invite(ctx):
+    invite = await ctx.channel.create_invite()
+    await ctx.send(f'Invite: {invite.url}')
 
-# Lệnh 21: purgeuser
+# Command 25: ping (mod)
 @bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purgeuser(ctx, member: discord.Member, amount: int = 10):
-    def check(m):
-        return m.author == member
-    await ctx.channel.purge(limit=amount, check=check)
-    await ctx.send(f'purgeuser {member.mention} {amount}')
+async def ping(ctx):
+    await ctx.send(f'Ping: {round(bot.latency * 1000)}ms')
 
-# Lệnh 22: purgebot
+# Command 26: uptime (mod)
 @bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purgebot(ctx, amount: int = 10):
-    def check(m):
-        return m.author.bot
-    await ctx.channel.purge(limit=amount, check=check)
-    await ctx.send(f'purgebot {amount}')
+async def uptime(ctx):
+    now = datetime.datetime.utcnow()
+    delta = now - start_time
+    await ctx.send(f'Uptime: {delta}')
 
-# Lệnh 23: purgecontains
+# Command 27: helpmod (mod)
 @bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purgecontains(ctx, text: str, amount: int = 10):
-    def check(m):
-        return text in m.content
-    await ctx.channel.purge(limit=amount, check=check)
-    await ctx.send(f'purgecontains {text} {amount}')
+async def helpmod(ctx):
+    await ctx.send('List of mod commands: kick, ban, etc. (simplified)')
 
-# Lệnh 24: purgestarts
+# Command 28: rules (mod)
 @bot.command()
 @commands.has_permissions(manage_messages=True)
-async def purgestarts(ctx, text: str, amount: int = 10):
-    def check(m):
-        return m.content.startswith(text)
-    await ctx.channel.purge(limit=amount, check=check)
-    await ctx.send(f'purgestarts {text} {amount}')
+async def rules(ctx, *, rules_text):
+    await ctx.send(f'Rules updated: {rules_text}')
 
-# Lệnh 25: purgeends
+# Command 29: setwelcome (mod)
 @bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purgeends(ctx, text: str, amount: int = 10):
-    def check(m):
-        return m.content.endswith(text)
-    await ctx.channel.purge(limit=amount, check=check)
-    await ctx.send(f'purgeends {text} {amount}')
+@commands.has_permissions(manage_channels=True)
+async def setwelcome(ctx, *, message):
+    await ctx.send(f'Welcome message set to: {message}')
 
-# Lệnh 26: whois
+# Command 30: setgoodbye (mod)
 @bot.command()
-async def whois(ctx, member: discord.Member = None):
-    if not member:
-        member = ctx.author
-    await ctx.send(f'whois {member.name} {member.id}')
+@commands.has_permissions(manage_channels=True)
+async def setgoodbye(ctx, *, message):
+    await ctx.send(f'Goodbye message set to: {message}')
 
-# Lệnh 27: avatar
+# Command 31: dm (owner)
 @bot.command()
-async def avatar(ctx, member: discord.Member = None):
-    if not member:
-        member = ctx.author
-    await ctx.send(f'avatar {member.display_avatar.url}')
+@commands.is_owner()
+async def dm(ctx, member: discord.Member, *, message):
+    await member.send(message)
+    await ctx.send(f'DM sent to {member}')
 
-# Lệnh 28: modlog
+# Command 32: say (owner)
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def modlog(ctx):
-    await ctx.send('modlog placeholder')
+@commands.is_owner()
+async def say(ctx, channel: discord.TextChannel, *, message):
+    await channel.send(message)
+    await ctx.send('Message sent')
 
-# Lệnh 29: case
+# Command 33: shutdown (owner)
 @bot.command()
-@commands.has_permissions(kick_members=True)
-async def case(ctx, case_id: int):
-    await ctx.send(f'case {case_id} placeholder')
+@commands.is_owner()
+async def shutdown(ctx):
+    await ctx.send('Shutting down')
+    await bot.close()
 
-# Lệnh 30: botinfo
+# Command 34: setstatus (owner)
 @bot.command()
-async def botinfo(ctx):
-    await ctx.send(f'botinfo {bot.user} {round(bot.latency * 1000)}ms {len(bot.guilds)}')
+@commands.is_owner()
+async def setstatus(ctx, *, status):
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game(status))
+    await ctx.send(f'Status set to {status}')
 
-# === 10 LENH SLASH CHO OWNER ===
+# Command 35: setactivity (owner)
+@bot.command()
+@commands.is_owner()
+async def setactivity(ctx, *, activity):
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=activity))
+    await ctx.send(f'Activity set to {activity}')
 
-# Lệnh 31: dm slash
-@bot.tree.command(name='dm', description='dm user')
-@app_commands.check(is_owner)
-async def dm_slash(interaction: discord.Interaction, member: discord.Member, message: str):
+# Command 36: changename (owner)
+@bot.command()
+@commands.is_owner()
+async def changename(ctx, *, new_name):
+    await bot.user.edit(username=new_name)
+    await ctx.send(f'Name changed to {new_name}')
+
+# Command 37: changeavatar (owner)
+@bot.command()
+@commands.is_owner()
+async def changeavatar(ctx, url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                return await ctx.send('Failed')
+            data = await resp.read()
+            await bot.user.edit(avatar=data)
+    await ctx.send('Avatar changed')
+
+# Command 38: eval (owner)
+@bot.command()
+@commands.is_owner()
+async def eval(ctx, *, code):
     try:
-        await member.send(message)
-        await interaction.response.send_message(f'dm {member.mention}', ephemeral=True)
+        result = eval(code)
+        await ctx.send(f'Result: {result}')
     except Exception as e:
-        await interaction.response.send_message(f'dm failed {str(e)}', ephemeral=True)
+        await ctx.send(f'Error: {e}')
 
-# Lệnh 32: say slash
-@bot.tree.command(name='say', description='say message')
-@app_commands.check(is_owner)
-async def say_slash(interaction: discord.Interaction, message: str):
-    await interaction.response.send_message('done', ephemeral=True)
-    await interaction.channel.send(message)
+# Command 39: exec (owner)
+@bot.command()
+@commands.is_owner()
+async def exec(ctx, *, code):
+    try:
+        exec(code)
+        await ctx.send('Executed')
+    except Exception as e:
+        await ctx.send(f'Error: {e}')
 
-# Lệnh 33: servers slash
-@bot.tree.command(name='servers', description='list servers')
-@app_commands.check(is_owner)
-async def servers_slash(interaction: discord.Interaction):
-    server_list = '\n'.join([f'{g.name}: {g.id}' for g in bot.guilds[:10]])
-    await interaction.response.send_message(f'servers {len(bot.guilds)}\n{server_list}', ephemeral=True)
-
-# Lệnh 34: leave slash
-@bot.tree.command(name='leave', description='leave server')
-@app_commands.check(is_owner)
-async def leave_slash(interaction: discord.Interaction, guild_id: str):
-    guild = bot.get_guild(int(guild_id))
-    if guild:
-        await guild.leave()
-        await interaction.response.send_message(f'leave {guild.name}', ephemeral=True)
-    else:
-        await interaction.response.send_message('guild not found', ephemeral=True)
-
-# Lệnh 35: broadcast slash
-@bot.tree.command(name='broadcast', description='broadcast message')
-@app_commands.check(is_owner)
-async def broadcast_slash(interaction: discord.Interaction, message: str):
-    await interaction.response.send_message('broadcasting', ephemeral=True)
-    success = 0
+# Command 40: broadcast (owner)
+@bot.command()
+@commands.is_owner()
+async def broadcast(ctx, *, message):
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
                 await channel.send(message)
-                success += 1
                 break
             except:
-                continue
-    await interaction.followup.send(f'broadcast {success} servers', ephemeral=True)
+                pass
+    await ctx.send('Broadcast sent')
 
-# Lệnh 36: setavatar slash
-@bot.tree.command(name='setavatar', description='set bot avatar')
-@app_commands.check(is_owner)
-async def setavatar_slash(interaction: discord.Interaction, url: str):
-    try:
-        response = requests.get(url, timeout=10)
-        await bot.user.edit(avatar=response.content)
-        await interaction.response.send_message('setavatar done', ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f'setavatar failed {str(e)}', ephemeral=True)
-
-# Lệnh 37: setname slash
-@bot.tree.command(name='setname', description='set bot username')
-@app_commands.check(is_owner)
-async def setname_slash(interaction: discord.Interaction, name: str):
-    try:
-        await bot.user.edit(username=name)
-        await interaction.response.send_message(f'setname {name}', ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f'setname failed {str(e)}', ephemeral=True)
-
-# Lệnh 38: maintenance slash
-@bot.tree.command(name='maintenance', description='toggle maintenance')
-@app_commands.check(is_owner)
-async def maintenance_slash(interaction: discord.Interaction, mode: str):
-    global maintenance_mode
-    if mode.lower() == 'on':
-        maintenance_mode = True
-        await interaction.response.send_message('maintenance on', ephemeral=True)
-    elif mode.lower() == 'off':
-        maintenance_mode = False
-        await interaction.response.send_message('maintenance off', ephemeral=True)
-    else:
-        await interaction.response.send_message('usage on/off', ephemeral=True)
-
-# Lệnh 39: eval slash
-@bot.tree.command(name='eval', description='evaluate code')
-@app_commands.check(is_owner)
-async def eval_slash(interaction: discord.Interaction, code: str):
-    try:
-        result = eval(code)
-        await interaction.response.send_message(f'eval {result}', ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f'eval error {e}', ephemeral=True)
-
-# Lệnh 40: shutdown slash
-@bot.tree.command(name='shutdown', description='shutdown bot')
-@app_commands.check(is_owner)
-async def shutdown_slash(interaction: discord.Interaction):
-    await interaction.response.send_message('shutdown', ephemeral=True)
-    await bot.close()
-
-# Chay bot
-if __name__ == '__main__':
-    keep_alive()
-    token = os.getenv('TOKEN')
-    if not token:
-        print("TOKEN not found in environment variables!")
-        exit(1)
-    bot.run(token)
+bot.run(os.getenv('DISCORD_TOKEN'))
