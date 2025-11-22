@@ -327,4 +327,4 @@ async def broadcast(ctx, *, message):
                 pass
     await ctx.send('Broadcast sent')
 
-bot.run(os.getenv('DISCORD_TOKEN'))
+bot.run(os.getenv('TOKEN'))
